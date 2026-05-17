@@ -22,6 +22,13 @@ import EventHub from './pages/EventHub';
 import Analytics from './pages/Analytics';
 import AboutUs from './pages/AboutUs';
 import InviteBuilder from './pages/InviteBuilder';
+import SubEventManager from './pages/SubEventManager';
+import ClientProofing from './pages/ClientProofing';
+import TeamManagement from './pages/TeamManagement';
+import QRCodeManager from './pages/QRCodeManager';
+import LiveSlideshow from './pages/LiveSlideshow';
+import PrintStore from './pages/PrintStore';
+import StorageManager from './pages/StorageManager';
 
 function AnimatedRoutes() {
   const location = useLocation();
@@ -49,6 +56,13 @@ function AnimatedRoutes() {
         <Route path="/invitebuilder" element={<InviteBuilder />} />
         <Route path="/whitelabelbranding" element={<WhiteLabelBranding />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/subevents" element={<SubEventManager />} />
+        <Route path="/clientproofing" element={<ClientProofing />} />
+        <Route path="/team" element={<TeamManagement />} />
+        <Route path="/qrcodes" element={<QRCodeManager />} />
+        <Route path="/slideshow" element={<LiveSlideshow />} />
+        <Route path="/printstore" element={<PrintStore />} />
+        <Route path="/storage" element={<StorageManager />} />
       </Routes>
     </AnimatePresence>
   );

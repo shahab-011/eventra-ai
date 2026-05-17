@@ -2,19 +2,49 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
 
-const navItems = [
-  { icon: 'dashboard', label: 'Dashboard', href: '/dashboard' },
-  { icon: 'event', label: 'Events', href: '/eventhub' },
-  { icon: 'photo_library', label: 'Media Library', href: '/medialibrary' },
-  { icon: 'group', label: 'Guests', href: '/guestmanagement' },
-  { icon: 'face_6', label: 'AI Face Rec.', href: '/aifacerecognitionhub' },
-  { icon: 'auto_fix_high', label: 'AI Editing', href: '/aiphotoediting' },
-  { icon: 'cloud_sync', label: 'Camera2Cloud', href: '/camera2cloudsetup' },
-  { icon: 'chat', label: 'WhatsApp Bot', href: '/whatsappbotconfig' },
-  { icon: 'mail', label: 'Invite Builder', href: '/invitebuilder' },
-  { icon: 'palette', label: 'White Label', href: '/whitelabelbranding' },
-  { icon: 'analytics', label: 'Analytics', href: '/analytics' },
+const navGroups = [
+  {
+    label: 'Events',
+    items: [
+      { icon: 'dashboard', label: 'Dashboard', href: '/dashboard' },
+      { icon: 'event', label: 'Events', href: '/eventhub' },
+      { icon: 'event_note', label: 'Sub-Events', href: '/subevents' },
+      { icon: 'qr_code', label: 'QR Codes', href: '/qrcodes' },
+      { icon: 'live_tv', label: 'Live Slideshow', href: '/slideshow' },
+    ],
+  },
+  {
+    label: 'Media',
+    items: [
+      { icon: 'photo_library', label: 'Media Library', href: '/medialibrary' },
+      { icon: 'cloud_sync', label: 'Camera2Cloud', href: '/camera2cloudsetup' },
+      { icon: 'face_6', label: 'AI Face Rec.', href: '/aifacerecognitionhub' },
+      { icon: 'auto_fix_high', label: 'AI Editing', href: '/aiphotoediting' },
+      { icon: 'check_circle', label: 'Client Proofing', href: '/clientproofing' },
+    ],
+  },
+  {
+    label: 'Guests',
+    items: [
+      { icon: 'group', label: 'Guests', href: '/guestmanagement' },
+      { icon: 'chat', label: 'WhatsApp Bot', href: '/whatsappbotconfig' },
+      { icon: 'mail', label: 'Invite Builder', href: '/invitebuilder' },
+      { icon: 'photo_album', label: 'Guest Gallery', href: '/guestgallery' },
+    ],
+  },
+  {
+    label: 'Business',
+    items: [
+      { icon: 'palette', label: 'White Label', href: '/whitelabelbranding' },
+      { icon: 'shopping_bag', label: 'Print Store', href: '/printstore' },
+      { icon: 'analytics', label: 'Analytics', href: '/analytics' },
+      { icon: 'people', label: 'Team', href: '/team' },
+      { icon: 'storage', label: 'Storage', href: '/storage' },
+    ],
+  },
 ];
+
+const navItems = navGroups.flatMap(g => g.items);
 
 const bottomItems = [
   { icon: 'settings', label: 'Settings', href: '/dashboard' },
@@ -66,49 +96,63 @@ export default function AppSidebar({ children }) {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto overflow-x-hidden">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.href;
-            return (
-              <Link key={item.href} to={item.href}>
-                <motion.div
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl font-label-md text-label-md transition-colors cursor-pointer relative group ${
-                    isActive
-                      ? 'bg-primary-container text-on-primary-container shadow-md shadow-primary-container/20'
-                      : 'text-on-surface-variant hover:bg-surface-variant hover:text-on-surface'
-                  }`}
-                  whileHover={{ x: collapsed ? 0 : 2 }}
-                  title={collapsed ? item.label : ''}
-                >
-                  <span
-                    className="material-symbols-outlined text-lg flex-shrink-0"
-                    style={{ fontVariationSettings: isActive ? "'FILL' 1" : "'FILL' 0" }}
+        <nav className="flex-1 p-3 overflow-y-auto overflow-x-hidden space-y-1">
+          {navGroups.map((group) => (
+            <div key={group.label} className="mb-2">
+              <AnimatePresence>
+                {!collapsed && (
+                  <motion.div
+                    className="px-3 pt-2 pb-1 text-xs font-bold text-on-surface-variant/50 uppercase tracking-widest"
+                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   >
-                    {item.icon}
-                  </span>
-                  <AnimatePresence>
-                    {!collapsed && (
-                      <motion.span
-                        initial={{ opacity: 0, x: -6 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -6 }}
-                        transition={{ duration: 0.15 }}
-                        className="whitespace-nowrap text-sm"
-                      >
-                        {item.label}
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
-                  {isActive && !collapsed && (
+                    {group.label}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {group.items.map((item) => {
+                const isActive = location.pathname === item.href;
+                return (
+                  <Link key={item.href} to={item.href}>
                     <motion.div
-                      className="absolute right-3 w-1.5 h-1.5 bg-on-primary-container rounded-full"
-                      layoutId="active-dot"
-                    />
-                  )}
-                </motion.div>
-              </Link>
-            );
-          })}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-xl font-label-md text-label-md transition-colors cursor-pointer relative ${
+                        isActive
+                          ? 'bg-primary-container text-on-primary-container shadow-md shadow-primary-container/20'
+                          : 'text-on-surface-variant hover:bg-surface-variant hover:text-on-surface'
+                      }`}
+                      whileHover={{ x: collapsed ? 0 : 2 }}
+                      title={collapsed ? item.label : ''}
+                    >
+                      <span
+                        className="material-symbols-outlined text-lg flex-shrink-0"
+                        style={{ fontVariationSettings: isActive ? "'FILL' 1" : "'FILL' 0" }}
+                      >
+                        {item.icon}
+                      </span>
+                      <AnimatePresence>
+                        {!collapsed && (
+                          <motion.span
+                            initial={{ opacity: 0, x: -6 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -6 }}
+                            transition={{ duration: 0.15 }}
+                            className="whitespace-nowrap text-sm"
+                          >
+                            {item.label}
+                          </motion.span>
+                        )}
+                      </AnimatePresence>
+                      {isActive && !collapsed && (
+                        <motion.div
+                          className="absolute right-3 w-1.5 h-1.5 bg-on-primary-container rounded-full"
+                          layoutId="active-dot"
+                        />
+                      )}
+                    </motion.div>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         {/* Bottom section */}

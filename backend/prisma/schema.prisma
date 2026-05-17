@@ -1,0 +1,451 @@
+// Eventra — Full Database Schema
+// PostgreSQL + Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users & Auth ──────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  name          String
+  phone         String?
+  role          UserRole @default(BUSINESS)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  studio        Studio?
+  teamMembers   TeamMember[]
+  sessions      Session[]
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  BUSINESS
+  GUEST
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Studio / Business ─────────────────────────────────────────
+
+model Studio {
+  id              String   @id @default(uuid())
+  ownerId         String   @unique
+  name            String
+  tagline         String?
+  logoUrl         String?
+  primaryColor    String   @default("#7c3aed")
+  accentColor     String   @default("#43e5b1")
+  watermarkEnabled Boolean @default(true)
+  customDomain    String?
+  subdomain       String   @unique
+  planTier        PlanTier @default(MINI)
+  storageUsedGB   Float    @default(0)
+  storageLimitGB  Float    @default(25)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation(fields: [ownerId], references: [id])
+  events          Event[]
+  teamMembers     TeamMember[]
+  pixels          TrackingPixel[]
+}
+
+enum PlanTier {
+  FREE
+  MINI
+  SMALL
+  MID
+  LARGE
+  ENTERPRISE
+}
+
+// ─── Team ──────────────────────────────────────────────────────
+
+model TeamMember {
+  id        String     @id @default(uuid())
+  studioId  String
+  userId    String
+  role      TeamRole   @default(VIEWER)
+  status    MemberStatus @default(PENDING)
+  invitedAt DateTime   @default(now())
+  joinedAt  DateTime?
+
+  studio    Studio     @relation(fields: [studioId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([studioId, userId])
+}
+
+enum TeamRole {
+  OWNER
+  ADMIN
+  SHOOTER
+  EDITOR
+  VIEWER
+}
+
+enum MemberStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+// ─── Events ────────────────────────────────────────────────────
+
+model Event {
+  id              String      @id @default(uuid())
+  studioId        String
+  name            String
+  type            EventType   @default(WEDDING)
+  status          EventStatus @default(UPCOMING)
+  startDate       DateTime
+  endDate         DateTime?
+  venue           String?
+  description     String?
+  guestLimit      Int         @default(300)
+  storageAllocGB  Float       @default(25)
+  storageUsedGB   Float       @default(0)
+  galleryTheme    String      @default("dark")
+  downloadEnabled Boolean     @default(true)
+  downloadPin     String?
+  isPublic        Boolean     @default(true)
+  transferredAt   DateTime?
+  transferredToId String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  studio          Studio      @relation(fields: [studioId], references: [id], onDelete: Cascade)
+  subEvents       SubEvent[]
+  guests          Guest[]
+  media           Media[]
+  qrCodes         QRCode[]
+  pixels          EventPixel[]
+  invites         Invite[]
+}
+
+enum EventType {
+  WEDDING
+  CORPORATE
+  BIRTHDAY
+  COLLEGE_FEST
+  CONCERT
+  MARATHON
+  OTHER
+}
+
+enum EventStatus {
+  UPCOMING
+  LIVE
+  COMPLETED
+  ARCHIVED
+}
+
+// ─── Sub-Events ────────────────────────────────────────────────
+
+model SubEvent {
+  id          String        @id @default(uuid())
+  eventId     String
+  name        String
+  ceremonyType CeremonyType @default(CUSTOM)
+  date        DateTime
+  venue       String?
+  guestAccess GuestAccess   @default(ALL)
+  status      EventStatus   @default(UPCOMING)
+  createdAt   DateTime      @default(now())
+
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  media       Media[]
+  qrCodes     QRCode[]
+}
+
+enum CeremonyType {
+  HALDI
+  MEHENDI
+  SANGEET
+  WEDDING
+  RECEPTION
+  ENGAGEMENT
+  ROKA
+  CUSTOM
+}
+
+enum GuestAccess {
+  ALL
+  VIP
+  PRIVATE
+}
+
+// ─── Guests ────────────────────────────────────────────────────
+
+model Guest {
+  id              String      @id @default(uuid())
+  eventId         String
+  name            String?
+  phone           String
+  whatsappOptIn   Boolean     @default(false)
+  selfieUrl       String?
+  faceEmbedding   Json?
+  rsvpStatus      RsvpStatus  @default(PENDING)
+  guestType       GuestType   @default(STANDARD)
+  photosReceived  Int         @default(0)
+  lastNotifiedAt  DateTime?
+  createdAt       DateTime    @default(now())
+
+  event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  photoSelections PhotoSelection[]
+  whatsappMessages WhatsAppMessage[]
+
+  @@unique([eventId, phone])
+}
+
+enum RsvpStatus {
+  PENDING
+  CONFIRMED
+  DECLINED
+}
+
+enum GuestType {
+  STANDARD
+  VIP
+  HOST
+}
+
+// ─── Media ─────────────────────────────────────────────────────
+
+model Media {
+  id              String      @id @default(uuid())
+  eventId         String
+  subEventId      String?
+  uploadedBy      String?
+  filename        String
+  originalUrl     String
+  thumbnailUrl    String?
+  processedUrl    String?
+  mimeType        String
+  sizeBytes       BigInt
+  width           Int?
+  height          Int?
+  takenAt         DateTime?
+  aiProcessed     Boolean     @default(false)
+  aiEdited        Boolean     @default(false)
+  isPrivate       Boolean     @default(false)
+  uploadSource    UploadSource @default(CAMERA2CLOUD)
+  createdAt       DateTime    @default(now())
+
+  event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  subEvent        SubEvent?   @relation(fields: [subEventId], references: [id])
+  faceTags        FaceTag[]
+  selections      PhotoSelection[]
+}
+
+enum UploadSource {
+  CAMERA2CLOUD
+  DESKTOP_UPLOADER
+  GUEST_UPLOAD
+  MANUAL
+}
+
+// ─── Face Recognition ──────────────────────────────────────────
+
+model FaceTag {
+  id          String   @id @default(uuid())
+  mediaId     String
+  guestId     String?
+  boundingBox Json
+  confidence  Float
+  createdAt   DateTime @default(now())
+
+  media       Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+}
+
+// ─── Client Proofing ───────────────────────────────────────────
+
+model PhotoSelection {
+  id          String          @id @default(uuid())
+  mediaId     String
+  guestId     String
+  type        SelectionType   @default(SELECTED)
+  comment     String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  media       Media           @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  guest       Guest           @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, guestId])
+}
+
+enum SelectionType {
+  SELECTED
+  FAVORITED
+  FLAGGED
+}
+
+// ─── QR Codes ──────────────────────────────────────────────────
+
+model QRCode {
+  id          String      @id @default(uuid())
+  studioId    String?
+  eventId     String?
+  subEventId  String?
+  label       String
+  url         String
+  qrColor     String      @default("#7c3aed")
+  bgColor     String      @default("#15121b")
+  scanCount   Int         @default(0)
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+
+  event       Event?      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  subEvent    SubEvent?   @relation(fields: [subEventId], references: [id])
+}
+
+// ─── WhatsApp ──────────────────────────────────────────────────
+
+model WhatsAppMessage {
+  id          String          @id @default(uuid())
+  guestId     String
+  type        MessageType
+  templateId  String?
+  body        String?
+  status      MessageStatus   @default(QUEUED)
+  waMessageId String?
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  createdAt   DateTime        @default(now())
+
+  guest       Guest           @relation(fields: [guestId], references: [id], onDelete: Cascade)
+}
+
+enum MessageType {
+  INVITE
+  RSVP_CONFIRMATION
+  PHOTO_READY
+  ITINERARY_REMINDER
+  GALLERY_LINK
+  CUSTOM
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// ─── Invites ───────────────────────────────────────────────────
+
+model Invite {
+  id           String    @id @default(uuid())
+  eventId      String
+  templateId   String
+  title        String
+  subtitle     String?
+  hostName     String?
+  rsvpByDate   DateTime?
+  note         String?
+  shareUrl     String?
+  viewCount    Int       @default(0)
+  rsvpCount    Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  event        Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+// ─── Tracking Pixels ───────────────────────────────────────────
+
+model TrackingPixel {
+  id          String        @id @default(uuid())
+  studioId    String
+  name        String
+  platform    PixelPlatform
+  pixelId     String
+  isActive    Boolean       @default(true)
+  fireCount   Int           @default(0)
+  createdAt   DateTime      @default(now())
+
+  studio      Studio        @relation(fields: [studioId], references: [id], onDelete: Cascade)
+  eventPixels EventPixel[]
+}
+
+model EventPixel {
+  id       String        @id @default(uuid())
+  eventId  String
+  pixelId  String
+
+  event    Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  pixel    TrackingPixel @relation(fields: [pixelId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, pixelId])
+}
+
+enum PixelPlatform {
+  META
+  GOOGLE
+}
+
+// ─── Print Store Orders ────────────────────────────────────────
+
+model Order {
+  id          String      @id @default(uuid())
+  eventId     String
+  guestPhone  String
+  guestName   String?
+  items       Json
+  totalAmount Int
+  currency    String      @default("INR")
+  status      OrderStatus @default(PENDING)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+// ─── Camera Accounts ───────────────────────────────────────────
+
+model CameraAccount {
+  id          String        @id @default(uuid())
+  studioId    String
+  eventId     String?
+  name        String
+  model       String?
+  ftpUsername String        @unique
+  ftpPassword String
+  status      CameraStatus  @default(DISCONNECTED)
+  lastUploadAt DateTime?
+  uploadCount  Int          @default(0)
+  createdAt   DateTime      @default(now())
+}
+
+enum CameraStatus {
+  CONNECTED
+  DISCONNECTED
+  PAIRING
+}
