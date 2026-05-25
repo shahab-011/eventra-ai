@@ -20,6 +20,11 @@ const schema = z.object({
   RAZORPAY_KEY_SECRET:    z.string().min(1),
   FRONTEND_URL:           z.string().url(),
   PORT:                   z.coerce.number().int().positive().default(3001),
+
+  // Optional — required only when Google OAuth is enabled
+  BACKEND_URL:            z.string().url().optional(),
+  GOOGLE_CLIENT_ID:       z.string().min(1).optional(),
+  GOOGLE_CLIENT_SECRET:   z.string().min(1).optional(),
 });
 
 const parsed = schema.safeParse(process.env);

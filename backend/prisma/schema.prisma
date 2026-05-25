@@ -13,18 +13,21 @@ datasource db {
 // ─── Users & Auth ──────────────────────────────────────────────
 
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  passwordHash  String
-  name          String
-  phone         String?
-  role          UserRole @default(BUSINESS)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  passwordHash        String
+  name                String
+  phone               String?
+  role                UserRole  @default(BUSINESS)
+  googleId            String?   @unique
+  emailVerified       Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  studio        Studio?
-  teamMembers   TeamMember[]
-  sessions      Session[]
+  studio              Studio?
+  teamMembers         TeamMember[]
+  sessions            Session[]
+  auditLogs           AuditLog[]
 }
 
 enum UserRole {
@@ -36,11 +39,40 @@ enum UserRole {
 model Session {
   id        String   @id @default(uuid())
   userId    String
-  token     String   @unique
+  token     String   @unique  // stores SHA-256 hash of the raw refresh token
   expiresAt DateTime
+  userAgent String?
+  ip        String?
   createdAt DateTime @default(now())
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Audit Log ─────────────────────────────────────────────────
+
+model AuditLog {
+  id        String      @id @default(uuid())
+  userId    String?
+  action    AuditAction
+  ip        String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+enum AuditAction {
+  SIGNUP
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  TOKEN_REFRESH
+  OAUTH_LOGIN
+  ACCOUNT_LOCKED
+  OTP_REQUESTED
+  OTP_VERIFIED
+  OTP_FAILED
 }
 
 // ─── Studio / Business ─────────────────────────────────────────
