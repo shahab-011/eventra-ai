@@ -74,6 +74,7 @@ enum AuditAction {
   OTP_VERIFIED
   OTP_FAILED
   EVENT_TRANSFER
+  MEDIA_DOWNLOAD
 }
 
 // ─── Studio / Business ─────────────────────────────────────────
@@ -280,6 +281,9 @@ model Media {
   processedUrl    String?
   mimeType        String
   sizeBytes       BigInt
+  key             String      @default("")
+  status          MediaStatus @default(UPLOADING)
+  wmUrl           String?
   width           Int?
   height          Int?
   takenAt         DateTime?
@@ -300,6 +304,13 @@ enum UploadSource {
   DESKTOP_UPLOADER
   GUEST_UPLOAD
   MANUAL
+}
+
+enum MediaStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
 }
 
 // ─── Face Recognition ──────────────────────────────────────────

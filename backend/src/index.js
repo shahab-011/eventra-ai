@@ -1,4 +1,5 @@
 import './config/env.js'; // validates all env vars at boot — exits on failure
+import { createServer } from 'node:http';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -8,7 +9,8 @@ import { z } from 'zod';
 
 import { requestContext } from './middleware/requestContext.js';
 import { AppError } from './lib/errors.js';
-import logger from './lib/logger.js';
+import logger       from './lib/logger.js';
+import { initIO }   from './lib/socket.js';
 
 import authRoutes from './routes/auth.js';
 import studioRoutes, { publicRouter as publicStudioRoutes } from './routes/studio.js';
@@ -25,8 +27,11 @@ import storageRoutes from './routes/storage.js';
 import storeRoutes from './routes/store.js';
 import pixelRoutes from './routes/pixels.js';
 
-const app = express();
-const PORT = process.env.PORT || 3001;
+const app        = express();
+const httpServer = createServer(app);
+const PORT       = process.env.PORT || 3001;
+
+initIO(httpServer);
 
 // ─── Security & compression ───────────────────────────────────
 app.use(helmet({
@@ -109,6 +114,6 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
 });
 
-app.listen(PORT, () => logger.info(`Eventra API running on http://localhost:${PORT}`));
+httpServer.listen(PORT, () => logger.info(`Eventra API running on http://localhost:${PORT}`));
 
 export default app;
