@@ -26,6 +26,7 @@ import teamRoutes from './routes/team.js';
 import storageRoutes from './routes/storage.js';
 import storeRoutes from './routes/store.js';
 import pixelRoutes from './routes/pixels.js';
+import faceRoutes  from './routes/faces.js';
 
 const app        = express();
 const httpServer = createServer(app);
@@ -83,6 +84,8 @@ app.use('/api/team', teamRoutes);
 app.use('/api/storage', storageRoutes);
 app.use('/api/store', storeRoutes);
 app.use('/api/pixels', pixelRoutes);
+app.use('/api/events', faceRoutes);
+app.use('/api',        faceRoutes);  // /api/gallery/:token (public, no event prefix)
 
 // ─── Health check ─────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '1.0.0', service: 'eventra-api' }));

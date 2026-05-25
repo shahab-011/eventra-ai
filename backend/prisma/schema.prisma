@@ -165,6 +165,7 @@ model Event {
   downloadPin     String?
   isPublic        Boolean     @default(true)
   inviteToken     String      @unique @default(uuid())
+  faceThreshold   Float       @default(0.38)
   transferredAt   DateTime?
   transferredToId String?
   createdAt       DateTime    @default(now())
@@ -177,6 +178,7 @@ model Event {
   qrCodes         QRCode[]
   pixels          EventPixel[]
   invites         Invite[]
+  galleryTokens   GalleryToken[]
 }
 
 enum EventType {
@@ -250,8 +252,11 @@ model Guest {
   createdAt       DateTime    @default(now())
 
   event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  photoSelections PhotoSelection[]
+  photoSelections  PhotoSelection[]
   whatsappMessages WhatsAppMessage[]
+  faceVector       GuestFaceVector?
+  galleryTokens    GalleryToken[]
+  faceTags         FaceTag[]
 
   @@unique([eventId, phone])
 }
@@ -296,6 +301,7 @@ model Media {
   event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
   subEvent        SubEvent?   @relation(fields: [subEventId], references: [id])
   faceTags        FaceTag[]
+  faceVectors     FaceVector[]
   selections      PhotoSelection[]
 }
 
@@ -316,14 +322,69 @@ enum MediaStatus {
 // ─── Face Recognition ──────────────────────────────────────────
 
 model FaceTag {
-  id          String   @id @default(uuid())
-  mediaId     String
-  guestId     String?
-  boundingBox Json
-  confidence  Float
-  createdAt   DateTime @default(now())
+  id           String       @id @default(uuid())
+  mediaId      String
+  guestId      String?
+  faceVectorId String?
+  boundingBox  Json
+  confidence   Float
+  reviewStatus ReviewStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
 
-  media       Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  media        Media        @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  guest        Guest?       @relation(fields: [guestId], references: [id], onDelete: SetNull)
+  faceVector   FaceVector?  @relation(fields: [faceVectorId], references: [id], onDelete: SetNull)
+}
+
+enum ReviewStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+model FaceVector {
+  id         String   @id @default(uuid())
+  mediaId    String
+  eventId    String
+  bbox       Json
+  quality    Float
+  detScore   Float    @default(0)
+  embedding  Unsupported("vector(512)")
+  createdAt  DateTime @default(now())
+
+  media      Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  faceTags   FaceTag[]
+
+  @@index([eventId])
+}
+
+model GuestFaceVector {
+  id        String   @id @default(uuid())
+  guestId   String   @unique
+  eventId   String
+  embedding Unsupported("vector(512)")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guest     Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+}
+
+model GalleryToken {
+  id        String   @id @default(uuid())
+  eventId   String
+  guestId   String
+  token     String   @unique @default(uuid())
+  expiresAt DateTime
+  scope     String   @default("gallery")
+  createdAt DateTime @default(now())
+
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  guest     Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([guestId])
+  @@index([eventId])
 }
 
 // ─── Client Proofing ───────────────────────────────────────────

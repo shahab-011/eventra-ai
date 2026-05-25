@@ -1,0 +1,17 @@
+# Core framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Face recognition — RetinaFace detection + ArcFace recognition (buffalo_l)
+insightface==0.7.3
+
+# Image processing
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+
+# HTTP client for image downloads
+httpx==0.28.1
+
+# onnxruntime is installed separately by the Dockerfile so we can pick
+# onnxruntime (CPU) or onnxruntime-gpu (CUDA) at build time.
+# DO NOT add either here — the Dockerfile RUN line below handles it.

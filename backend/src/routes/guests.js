@@ -8,7 +8,8 @@ import { authenticate } from '../middleware/auth.js';
 import { validate }  from '../lib/validate.js';
 import { parsePagination } from '../lib/pagination.js';
 import { notFound, forbidden, badRequest, conflict } from '../lib/errors.js';
-import logger        from '../lib/logger.js';
+import logger           from '../lib/logger.js';
+import { faceDetectQueue } from '../lib/queues.js';
 
 // ─── Routers ──────────────────────────────────────────────────
 const router                    = Router();  // /api/guests
@@ -472,6 +473,15 @@ router.post('/:id/selfie', authenticate, async (req, res, next) => {
       where: { id: req.params.id },
       data:  { selfieUrl, ...(faceEmbedding ? { faceEmbedding } : {}) },
     });
+
+    // Kick off face matching (fire-and-forget — enqueue to AI worker)
+    faceDetectQueue.add('match-selfie', {
+      guestId: req.params.id,
+      eventId: guest.eventId,
+    }, { jobId: `selfie-${req.params.id}` }).catch(err =>
+      logger.warn({ err, guestId: req.params.id }, 'failed to enqueue match-selfie'),
+    );
+
     res.json({ data: updated });
   } catch (err) { next(err); }
 });
