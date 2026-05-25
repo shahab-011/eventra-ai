@@ -25,6 +25,9 @@ const schema = z.object({
   BACKEND_URL:            z.string().url().optional(),
   GOOGLE_CLIENT_ID:       z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET:   z.string().min(1).optional(),
+
+  // Optional — the edge hostname studios set their custom-domain CNAME to
+  EDGE_HOSTNAME:          z.string().min(1).optional(),
 });
 
 const parsed = schema.safeParse(process.env);

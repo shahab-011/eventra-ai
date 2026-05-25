@@ -11,6 +11,7 @@ import { AppError } from './lib/errors.js';
 import logger from './lib/logger.js';
 
 import authRoutes from './routes/auth.js';
+import studioRoutes, { publicRouter as publicStudioRoutes } from './routes/studio.js';
 import eventRoutes from './routes/events.js';
 import subEventRoutes from './routes/subEvents.js';
 import guestRoutes from './routes/guests.js';
@@ -60,7 +61,9 @@ app.use('/api/qr/:id/scan', webhookLimiter);
 app.use('/api/pixels/fire', webhookLimiter);
 
 // ─── Routes ───────────────────────────────────────────────────
-app.use('/api/auth', authRoutes);
+app.use('/api/auth',   authRoutes);
+app.use('/api/studio', studioRoutes);
+app.use('/api/public', publicStudioRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/events', subEventRoutes);
 app.use('/api/guests', guestRoutes);

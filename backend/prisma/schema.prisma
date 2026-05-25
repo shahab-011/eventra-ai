@@ -78,21 +78,24 @@ enum AuditAction {
 // ─── Studio / Business ─────────────────────────────────────────
 
 model Studio {
-  id              String   @id @default(uuid())
-  ownerId         String   @unique
-  name            String
-  tagline         String?
-  logoUrl         String?
-  primaryColor    String   @default("#7c3aed")
-  accentColor     String   @default("#43e5b1")
-  watermarkEnabled Boolean @default(true)
-  customDomain    String?
-  subdomain       String   @unique
-  planTier        PlanTier @default(MINI)
-  storageUsedGB   Float    @default(0)
-  storageLimitGB  Float    @default(25)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                  String   @id @default(uuid())
+  ownerId             String   @unique
+  name                String
+  tagline             String?
+  logoUrl             String?
+  primaryColor        String   @default("#7c3aed")
+  accentColor         String   @default("#43e5b1")
+  watermarkEnabled    Boolean  @default(true)
+  watermarkUrl        String?
+  defaultGalleryTheme String   @default("dark")
+  customDomain        String?  @unique
+  domainVerified      Boolean  @default(false)
+  subdomain           String   @unique
+  planTier            PlanTier @default(MINI)
+  storageUsedGB       Float    @default(0)
+  storageLimitGB      Float    @default(25)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   owner           User     @relation(fields: [ownerId], references: [id])
   events          Event[]

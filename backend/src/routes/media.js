@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/auth.js';
 import prisma from '../lib/prisma.js';
+import { assertStorageAvailable, incrementStorage, decrementStorage } from '../services/storage.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
@@ -20,28 +21,42 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // POST /api/media/upload — upload single file
-router.post('/upload', authenticate, upload.single('file'), async (req, res) => {
+router.post('/upload', authenticate, upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     const { eventId, subEventId, uploadSource = 'MANUAL' } = req.body;
     if (!eventId) return res.status(400).json({ error: 'eventId required' });
 
-    // In production: upload req.file.buffer to Cloudflare R2 / S3
+    // Resolve which studio owns this event so we can enforce the storage limit
+    const event = await prisma.event.findUnique({
+      where:  { id: eventId },
+      select: { studioId: true },
+    });
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+
+    // Throws 402 STORAGE_LIMIT_EXCEEDED if the upload would exceed the plan limit
+    await assertStorageAvailable(event.studioId, req.file.size);
+
+    // In production: upload req.file.buffer to Cloudflare R2 (see src/lib/r2.js)
     // For now we store metadata only
     const media = await prisma.media.create({
       data: {
         eventId,
         subEventId: subEventId || null,
-        filename: req.file.originalname,
+        filename:   req.file.originalname,
         originalUrl: `/media/${eventId}/${req.file.originalname}`,
-        mimeType: req.file.mimetype,
-        sizeBytes: req.file.size,
+        mimeType:   req.file.mimetype,
+        sizeBytes:  req.file.size,
         uploadSource,
       },
     });
+
+    // Keep studio running total in sync
+    await incrementStorage(event.studioId, req.file.size);
+
     res.status(201).json(media);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
@@ -64,9 +79,20 @@ router.patch('/:id', authenticate, async (req, res) => {
 });
 
 // DELETE /api/media/:id
-router.delete('/:id', authenticate, async (req, res) => {
-  await prisma.media.delete({ where: { id: req.params.id } });
-  res.status(204).end();
+router.delete('/:id', authenticate, async (req, res, next) => {
+  try {
+    const media = await prisma.media.findUnique({
+      where:  { id: req.params.id },
+      select: { sizeBytes: true, event: { select: { studioId: true } } },
+    });
+    if (!media) return res.status(404).json({ error: 'Media not found' });
+
+    await prisma.media.delete({ where: { id: req.params.id } });
+    await decrementStorage(media.event.studioId, media.sizeBytes);
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;
