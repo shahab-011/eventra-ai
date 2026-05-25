@@ -1,9 +1,8 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.js';
+import prisma from '../lib/prisma.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 router.get('/', authenticate, async (req, res) => {
   const studio = await prisma.studio.findUnique({ where: { ownerId: req.user.userId }, include: { events: { select: { id: true, name: true, storageUsedGB: true, storageAllocGB: true, status: true, startDate: true } } } });

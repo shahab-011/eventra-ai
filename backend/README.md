@@ -61,29 +61,87 @@ npm run dev
 | POST | /api/pixels | Add pixel |
 | POST | /api/pixels/fire | Fire pixel (public) |
 
+## Error Envelope
+
+Every error response follows a single shape:
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Event not found",
+    "details": [{ "path": "email", "message": "Invalid email" }]
+  }
+}
+```
+
+`details` is only present for `VALIDATION_ERROR`. Known codes:
+
+| Code | Status | Meaning |
+|------|--------|---------|
+| `VALIDATION_ERROR` | 400 | Zod schema failed; `details` has field-level errors |
+| `BAD_REQUEST` | 400 | Malformed request |
+| `UNAUTHORIZED` | 401 | Missing or invalid JWT |
+| `FORBIDDEN` | 403 | Insufficient role |
+| `NOT_FOUND` | 404 | Resource does not exist |
+| `CONFLICT` | 409 | Duplicate resource |
+| `INTERNAL_ERROR` | 500 | Unhandled server error |
+
+## Pagination Contract
+
+List endpoints accept these query params:
+
+| Param | Default | Max | Description |
+|-------|---------|-----|-------------|
+| `page` | `1` | — | 1-based page number |
+| `limit` | `20` | `100` | Items per page |
+| `sort` | none | — | `field:asc` or `field:desc` (e.g. `createdAt:desc`) |
+
+Use `parsePagination(req.query)` from `src/lib/pagination.js`:
+
+```js
+import { parsePagination } from '../lib/pagination.js';
+
+const { page, skip, take, orderBy } = parsePagination(req.query);
+const [items, total] = await Promise.all([
+  prisma.model.findMany({ where, skip, take, orderBy }),
+  prisma.model.count({ where }),
+]);
+res.json({ data: items, meta: { page, limit: take, total, pages: Math.ceil(total / take) } });
+```
+
 ## Architecture
 
 ```
 backend/
 ├── prisma/
-│   └── schema.prisma       # Full DB schema (20+ models)
+│   └── schema.prisma           # Full DB schema (20+ models)
 ├── src/
-│   ├── index.js            # Express app entry
+│   ├── index.js                # Express app entry + global error handler
+│   ├── config/
+│   │   └── env.js              # Zod env validation (exits on missing vars)
+│   ├── lib/
+│   │   ├── prisma.js           # PrismaClient singleton
+│   │   ├── logger.js           # Pino structured logger
+│   │   ├── errors.js           # AppError + notFound/forbidden/etc helpers
+│   │   ├── validate.js         # validate(schema, target) middleware factory
+│   │   └── pagination.js       # parsePagination(query) → {skip,take,orderBy}
 │   ├── middleware/
-│   │   └── auth.js         # JWT authentication
+│   │   ├── auth.js             # JWT authentication + requireRole
+│   │   └── requestContext.js   # requestId, X-Request-Id header, request logging
 │   └── routes/
-│       ├── auth.js         # Signup / login
-│       ├── events.js       # Event CRUD
-│       ├── subEvents.js    # Sub-event CRUD
-│       ├── guests.js       # Guest management + face embedding
-│       ├── media.js        # Upload + AI processing
-│       ├── whatsapp.js     # WhatsApp Business API
-│       ├── analytics.js    # Stats and reporting
-│       ├── invites.js      # Digital invite builder
-│       ├── qr.js           # QR code management
-│       ├── team.js         # Team roles
-│       ├── storage.js      # Storage + client transfer
-│       ├── store.js        # Print store orders
-│       └── pixels.js       # Meta/Google pixel tracking
+│       ├── auth.js             # Signup / login
+│       ├── events.js           # Event CRUD
+│       ├── subEvents.js        # Sub-event CRUD
+│       ├── guests.js           # Guest management + face embedding
+│       ├── media.js            # Upload + AI processing
+│       ├── whatsapp.js         # WhatsApp Business API
+│       ├── analytics.js        # Stats and reporting
+│       ├── invites.js          # Digital invite builder
+│       ├── qr.js               # QR code management
+│       ├── team.js             # Team roles
+│       ├── storage.js          # Storage + client transfer
+│       ├── store.js            # Print store orders
+│       └── pixels.js           # Meta/Google pixel tracking
 └── .env.example
 ```

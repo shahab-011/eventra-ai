@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.js';
 import { v4 as uuidv4 } from 'uuid';
+import prisma from '../lib/prisma.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 router.get('/', authenticate, async (req, res) => {
   const { eventId } = req.query;
