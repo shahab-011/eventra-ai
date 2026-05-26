@@ -15,6 +15,7 @@ import {
   AbortMultipartUploadCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Upload } from '@aws-sdk/lib-storage';
 
 const r2 = new S3Client({
   region:   'auto',
@@ -96,6 +97,30 @@ export async function putObject(key, buffer, contentType) {
     ContentType:    contentType,
     ContentLength:  buffer.length,
   }));
+  return cdnUrl(key);
+}
+
+// ─── Streaming upload (FTP → R2 without buffering full file) ──
+
+/**
+ * Stream a Readable directly to R2 using managed multipart.
+ * Used by the FTP server where file size is not known upfront.
+ * Returns the public CDN URL.
+ */
+export async function streamUpload(key, readableStream, contentType) {
+  const upload = new Upload({
+    client: r2,
+    params: {
+      Bucket:      BUCKET,
+      Key:         key,
+      Body:        readableStream,
+      ContentType: contentType,
+    },
+    queueSize:  4,
+    partSize:   5 * 1024 * 1024, // 5 MB minimum part size
+    leavePartsOnError: false,
+  });
+  await upload.done();
   return cdnUrl(key);
 }
 

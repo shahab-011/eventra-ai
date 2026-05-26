@@ -26,7 +26,9 @@ import teamRoutes from './routes/team.js';
 import storageRoutes from './routes/storage.js';
 import storeRoutes from './routes/store.js';
 import pixelRoutes from './routes/pixels.js';
-import faceRoutes  from './routes/faces.js';
+import faceRoutes    from './routes/faces.js';
+import cameraRoutes  from './routes/cameras.js';
+import { startFTPServer } from './ftpServer.js';
 
 const app        = express();
 const httpServer = createServer(app);
@@ -86,6 +88,7 @@ app.use('/api/store', storeRoutes);
 app.use('/api/pixels', pixelRoutes);
 app.use('/api/events', faceRoutes);
 app.use('/api',        faceRoutes);  // /api/gallery/:token (public, no event prefix)
+app.use('/api/cameras', cameraRoutes);
 
 // ─── Health check ─────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '1.0.0', service: 'eventra-api' }));
@@ -117,6 +120,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
 });
 
-httpServer.listen(PORT, () => logger.info(`Eventra API running on http://localhost:${PORT}`));
+httpServer.listen(PORT, () => {
+  logger.info(`Eventra API running on http://localhost:${PORT}`);
+  startFTPServer();
+});
 
 export default app;

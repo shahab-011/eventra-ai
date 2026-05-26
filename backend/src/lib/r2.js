@@ -7,6 +7,7 @@ export {
   headObject,
   getObjectBuffer,
   putObject,
+  streamUpload,
   deleteObject,
   deleteObjects,
   createMultipartUpload,

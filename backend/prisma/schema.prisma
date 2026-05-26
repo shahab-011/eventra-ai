@@ -542,17 +542,20 @@ enum OrderStatus {
 // ─── Camera Accounts ───────────────────────────────────────────
 
 model CameraAccount {
-  id          String        @id @default(uuid())
-  studioId    String
-  eventId     String?
-  name        String
-  model       String?
-  ftpUsername String        @unique
-  ftpPassword String
-  status      CameraStatus  @default(DISCONNECTED)
-  lastUploadAt DateTime?
-  uploadCount  Int          @default(0)
-  createdAt   DateTime      @default(now())
+  id               String        @id @default(uuid())
+  studioId         String
+  eventId          String?
+  subEventId       String?
+  name             String
+  model            String?
+  apiKey           String        @unique @default(uuid())
+  ftpUsername      String        @unique
+  ftpPassword      String
+  status           CameraStatus  @default(DISCONNECTED)
+  lastHeartbeatAt  DateTime?
+  lastUploadAt     DateTime?
+  uploadCount      Int           @default(0)
+  createdAt        DateTime      @default(now())
 }
 
 enum CameraStatus {
