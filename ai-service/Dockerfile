@@ -35,9 +35,10 @@ RUN apt-get update && \
 # ── Shared layers ────────────────────────────────────────────────────────────
 FROM base-${BASE} AS final
 
-# Runtime libs for OpenCV (headless still needs libGL, libSM etc.)
+# Runtime libs for OpenCV + libraw (needed by rawpy for RAW camera files)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 curl && \
+    libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 curl \
+    libraw-dev libjpeg-dev libpng-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -28,6 +28,7 @@ import storeRoutes from './routes/store.js';
 import pixelRoutes from './routes/pixels.js';
 import faceRoutes    from './routes/faces.js';
 import cameraRoutes  from './routes/cameras.js';
+import editingRoutes from './routes/editing.js';
 import { startFTPServer } from './ftpServer.js';
 
 const app        = express();
@@ -89,6 +90,7 @@ app.use('/api/pixels', pixelRoutes);
 app.use('/api/events', faceRoutes);
 app.use('/api',        faceRoutes);  // /api/gallery/:token (public, no event prefix)
 app.use('/api/cameras', cameraRoutes);
+app.use('/api/editing', editingRoutes);
 
 // ─── Health check ─────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', version: '1.0.0', service: 'eventra-api' }));

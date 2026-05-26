@@ -179,6 +179,7 @@ model Event {
   pixels          EventPixel[]
   invites         Invite[]
   galleryTokens   GalleryToken[]
+  editJobs        EditJob[]
 }
 
 enum EventType {
@@ -294,6 +295,8 @@ model Media {
   takenAt         DateTime?
   aiProcessed     Boolean     @default(false)
   aiEdited        Boolean     @default(false)
+  cullStatus      CullStatus  @default(NONE)
+  pHash           String?
   isPrivate       Boolean     @default(false)
   uploadSource    UploadSource @default(CAMERA2CLOUD)
   createdAt       DateTime    @default(now())
@@ -303,6 +306,13 @@ model Media {
   faceTags        FaceTag[]
   faceVectors     FaceVector[]
   selections      PhotoSelection[]
+}
+
+enum CullStatus {
+  NONE
+  KEEP
+  SUGGESTED_REJECT
+  REJECTED
 }
 
 enum UploadSource {
@@ -562,4 +572,35 @@ enum CameraStatus {
   CONNECTED
   DISCONNECTED
   PAIRING
+}
+
+// ─── AI Editing Jobs ───────────────────────────────────────────
+
+model EditJob {
+  id          String        @id @default(uuid())
+  eventId     String
+  type        EditJobType
+  status      EditJobStatus @default(PENDING)
+  total       Int           @default(0)
+  done        Int           @default(0)
+  failed      Int           @default(0)
+  lut         String?
+  params      Json?
+  bullJobId   String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+enum EditJobType {
+  AUTO_EDIT
+  AUTO_CULL
+}
+
+enum EditJobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
 }

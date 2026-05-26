@@ -13,10 +13,13 @@ Endpoints:
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
+import tempfile
 from contextlib import asynccontextmanager
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import cv2
 import httpx
@@ -25,6 +28,8 @@ import onnxruntime as ort
 from fastapi import FastAPI, HTTPException
 from insightface.app import FaceAnalysis
 from pydantic import BaseModel
+
+import edit as edit_module
 
 # ─── Logging ────────────────────────────────────────────────────
 logging.basicConfig(
@@ -65,6 +70,11 @@ def _load_model() -> FaceAnalysis:
 async def lifespan(_: FastAPI):
     global face_app
     face_app = _load_model()
+    # Write .cube files to /app/luts/ for external tool use
+    try:
+        edit_module.write_cube_files(os.getenv("LUT_OUTPUT_DIR", "/app/luts"))
+    except Exception as _e:
+        logger.warning("Could not write .cube files: %s", _e)
     yield
 
 
@@ -212,3 +222,179 @@ async def embed_selfie(body: EmbedRequest):
         "quality":   quality,
         "bbox":      [round(float(v), 2) for v in face.bbox],
     }
+
+
+# ─── /auto-edit ──────────────────────────────────────────────────
+
+class AutoEditParams(BaseModel):
+    auto_exposure: bool = True
+    auto_wb:       bool = True
+    auto_contrast: bool = False
+    skin_smooth:   float = 0.0    # 0 = off, 1 = max
+
+class AutoEditRequest(BaseModel):
+    imageUrl: str
+    lut:      str = "natural"
+    params:   AutoEditParams = AutoEditParams()
+
+
+@app.post("/auto-edit")
+async def auto_edit(body: AutoEditRequest):
+    """
+    Apply colour grade + auto corrections to an image.
+
+    Returns the processed image as base64-encoded JPEG so the Node worker
+    can upload it to R2 (keeps R2 credentials out of the Python service).
+
+    Supports:
+      • JPEG / PNG / WebP / GIF (via OpenCV)
+      • RAW formats (.CR3 / .NEF / .ARW / .DNG etc.) via rawpy
+    """
+    img = await _load_any_image(body.imageUrl)
+
+    params_dict = body.params.model_dump()
+
+    img = edit_module.auto_correct(img, params_dict)
+    img = edit_module.apply_lut(img, body.lut)
+
+    if body.params.skin_smooth > 0.0:
+        img = edit_module.smooth_skin(img, body.params.skin_smooth)
+
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    image_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+    return {
+        "imageData": image_b64,
+        "mimeType":  "image/jpeg",
+        "lut":       body.lut,
+        "width":     img.shape[1],
+        "height":    img.shape[0],
+    }
+
+
+# ─── /cull-score ─────────────────────────────────────────────────
+
+class CullRequest(BaseModel):
+    imageUrl: str
+
+
+@app.post("/cull-score")
+async def cull_score(body: CullRequest):
+    """
+    Score an image for culling quality.
+
+    Returns:
+      blur             — Laplacian sharpness [0, 1]  (higher = sharper)
+      exposure         — how close to ideal exposure [0, 1]
+      eyesOpen         — bool — True if a face is detected with good confidence
+      smile            — float [0, 1] — mouth-width proxy for smile
+      compositionScore — rule-of-thirds saliency [0, 1]
+      pHash            — 16-char hex dHash for duplicate detection
+    """
+    img = await _download_image(body.imageUrl)
+
+    blur_score  = _laplacian_blur(img)
+    exp_score   = _exposure_score(img)
+    comp_score  = edit_module.composition_score(img)
+    phash_val   = edit_module.dhash(img)
+
+    eyes_open = False
+    smile     = 0.0
+    if face_app is not None:
+        try:
+            faces = face_app.get(img)
+            eyes_open, smile = _face_expression(faces)
+        except Exception:
+            pass
+
+    return {
+        "blur":             round(blur_score, 4),
+        "exposure":         round(exp_score, 4),
+        "eyesOpen":         eyes_open,
+        "smile":            round(smile, 4),
+        "compositionScore": comp_score,
+        "pHash":            phash_val,
+    }
+
+
+# ─── /luts (convenience — Node side also exposes this) ───────────
+
+@app.get("/luts")
+def list_luts():
+    return {"luts": edit_module.available_luts()}
+
+
+# ─── Internal helpers for edit endpoints ─────────────────────────
+
+_RAW_EXTS = {".nef", ".cr2", ".cr3", ".arw", ".dng", ".orf", ".rw2",
+             ".pef", ".srw", ".raf", ".3fr", ".mrw", ".nrw", ".rwl"}
+
+
+async def _load_any_image(url: str) -> np.ndarray:
+    """Download an image — uses rawpy for RAW formats, cv2 for everything else."""
+    ext = Path(url.split("?")[0]).suffix.lower()
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        resp = await client.get(url)
+    if resp.status_code != 200:
+        raise HTTPException(400, f"Image download failed (HTTP {resp.status_code})")
+
+    if ext in _RAW_EXTS:
+        try:
+            import rawpy   # optional heavy dep — only needed for RAW
+        except ImportError:
+            raise HTTPException(500, "rawpy not installed — cannot process RAW files")
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(resp.content)
+            tmp_path = tmp.name
+        try:
+            with rawpy.imread(tmp_path) as raw:
+                rgb = raw.postprocess(
+                    use_camera_wb=True,
+                    no_auto_bright=False,
+                    output_bps=8,
+                )
+            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+    else:
+        arr = np.frombuffer(resp.content, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(400, "Could not decode image")
+        return img
+
+
+def _exposure_score(img: np.ndarray) -> float:
+    """
+    Score based on mean luminance — penalise very dark or blown images.
+    Peak at 0.40–0.55 relative luminance.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    mean = float(gray.mean())
+    # Gaussian centred at 0.45
+    score = float(np.exp(-((mean - 0.45) ** 2) / (2 * 0.18 ** 2)))
+    return round(min(1.0, score), 4)
+
+
+def _face_expression(faces) -> tuple[bool, float]:
+    """
+    Rough eye-open + smile heuristic from insightface keypoints.
+    Returns (eyes_open: bool, smile_score: float [0,1]).
+    """
+    if not faces:
+        return False, 0.0
+
+    best = max(faces, key=lambda f: float(f.det_score))
+    eyes_open = float(best.det_score) > 0.65
+
+    smile = 0.0
+    if hasattr(best, "kps") and best.kps is not None and len(best.kps) >= 5:
+        kps   = best.kps
+        x1, y1, x2, y2 = best.bbox
+        face_w = max(1.0, float(x2 - x1))
+        left_m, right_m = kps[3], kps[4]
+        mouth_w = float(np.linalg.norm(right_m - left_m))
+        smile   = round(min(1.0, mouth_w / (face_w * 0.45)), 3)
+
+    return eyes_open, smile

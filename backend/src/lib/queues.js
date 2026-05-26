@@ -41,3 +41,9 @@ export const faceDetectQueue = new Queue('detect-faces', {
   connection:      bullConnection,
   defaultJobOptions,
 });
+
+/** Queues AI photo editing and culling tasks (module B10). */
+export const editQueue = new Queue('edit-jobs', {
+  connection:      bullConnection,
+  defaultJobOptions,
+});

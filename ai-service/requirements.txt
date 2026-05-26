@@ -8,6 +8,13 @@ insightface==0.7.3
 # Image processing
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
+Pillow==10.4.0
+
+# Scipy for trilinear LUT interpolation
+scipy==1.13.1
+
+# RAW camera file support (wraps libraw — libraw-dev must be installed in the OS)
+rawpy==0.22.0
 
 # HTTP client for image downloads
 httpx==0.28.1

@@ -8,6 +8,7 @@
     "dev": "nodemon src/index.js",
     "worker": "node src/workers/mediaWorker.js",
     "worker:ai": "node src/workers/aiWorker.js",
+    "worker:edit": "node src/workers/editWorker.js",
     "start": "node src/index.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
