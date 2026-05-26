@@ -50,7 +50,10 @@ app.use(helmet({
 }));
 app.use(compression());
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Request context (requestId + structured logging) ─────────

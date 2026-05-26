@@ -99,10 +99,12 @@ model Studio {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  owner           User     @relation(fields: [ownerId], references: [id])
-  events          Event[]
-  teamMembers     TeamMember[]
-  pixels          TrackingPixel[]
+  owner              User     @relation(fields: [ownerId], references: [id])
+  events             Event[]
+  teamMembers        TeamMember[]
+  pixels             TrackingPixel[]
+  whatsappTemplates  WhatsAppTemplate[]
+  automationRules    AutomationRule[]
 }
 
 enum PlanTier {
@@ -178,8 +180,9 @@ model Event {
   qrCodes         QRCode[]
   pixels          EventPixel[]
   invites         Invite[]
-  galleryTokens   GalleryToken[]
-  editJobs        EditJob[]
+  galleryTokens     GalleryToken[]
+  editJobs          EditJob[]
+  whatsappMessages  WhatsAppMessage[]
 }
 
 enum EventType {
@@ -442,19 +445,25 @@ model QRCode {
 // ─── WhatsApp ──────────────────────────────────────────────────
 
 model WhatsAppMessage {
-  id          String          @id @default(uuid())
-  guestId     String
-  type        MessageType
-  templateId  String?
-  body        String?
-  status      MessageStatus   @default(QUEUED)
-  waMessageId String?
-  sentAt      DateTime?
-  deliveredAt DateTime?
-  readAt      DateTime?
-  createdAt   DateTime        @default(now())
+  id                  String          @id @default(uuid())
+  guestId             String
+  eventId             String?
+  type                MessageType
+  templateId          String?
+  templateName        String?
+  templateComponents  Json?
+  body                String?
+  status              MessageStatus   @default(QUEUED)
+  waMessageId         String?
+  errorData           Json?
+  sentAt              DateTime?
+  deliveredAt         DateTime?
+  readAt              DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
-  guest       Guest           @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  guest       Guest   @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  event       Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
 }
 
 enum MessageType {
@@ -603,4 +612,52 @@ enum EditJobStatus {
   RUNNING
   DONE
   FAILED
+}
+
+// ─── WhatsApp Templates & Automation ──────────────────────────
+
+model WhatsAppTemplate {
+  id          String           @id @default(uuid())
+  studioId    String
+  name        String           // Meta-approved template name, e.g. "eventra_invite_v1"
+  displayName String
+  language    String           @default("en_US")
+  category    TemplateCategory @default(UTILITY)
+  headerText  String?
+  body        String           // Body text with {{1}} {{2}} placeholders
+  footerText  String?
+  variables   String[]         // Ordered variable descriptions for UI
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  studio      Studio           @relation(fields: [studioId], references: [id], onDelete: Cascade)
+}
+
+enum TemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+model AutomationRule {
+  id           String      @id @default(uuid())
+  studioId     String
+  name         String
+  trigger      AutoTrigger
+  messageType  MessageType @default(INVITE)
+  templateName String?     // Meta template name to use
+  offsetHours  Int         @default(0)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  studio       Studio      @relation(fields: [studioId], references: [id], onDelete: Cascade)
+}
+
+enum AutoTrigger {
+  GUEST_ADDED
+  EVENT_START
+  AFTER_EVENT
+  PHOTO_READY
 }

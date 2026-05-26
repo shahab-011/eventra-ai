@@ -47,3 +47,16 @@ export const editQueue = new Queue('edit-jobs', {
   connection:      bullConnection,
   defaultJobOptions,
 });
+
+/**
+ * Queues outbound WhatsApp messages (module B11).
+ * Lower concurrency in the worker to respect Meta rate limits.
+ */
+export const whatsappQueue = new Queue('whatsapp-jobs', {
+  connection:      bullConnection,
+  defaultJobOptions: {
+    ...defaultJobOptions,
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 10_000 },
+  },
+});
