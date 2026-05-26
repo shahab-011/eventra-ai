@@ -253,11 +253,16 @@ model Guest {
   rsvpStatus      RsvpStatus  @default(PENDING)
   guestType       GuestType   @default(STANDARD)
   photosReceived  Int         @default(0)
+  inviteId        String?
+  plusOnes        Int         @default(0)
+  mealPref        String?
+  rsvpMessage     String?
   lastNotifiedAt  DateTime?
   deletedAt       DateTime?
   createdAt       DateTime    @default(now())
 
   event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  invite          Invite?     @relation(fields: [inviteId], references: [id], onDelete: SetNull)
   photoSelections  PhotoSelection[]
   whatsappMessages WhatsAppMessage[]
   faceVector       GuestFaceVector?
@@ -265,6 +270,7 @@ model Guest {
   faceTags         FaceTag[]
 
   @@unique([eventId, phone])
+  @@index([inviteId])
 }
 
 enum RsvpStatus {
@@ -488,20 +494,41 @@ enum MessageStatus {
 // ─── Invites ───────────────────────────────────────────────────
 
 model Invite {
-  id           String    @id @default(uuid())
-  eventId      String
-  templateId   String
-  title        String
-  subtitle     String?
-  hostName     String?
-  rsvpByDate   DateTime?
-  note         String?
-  shareUrl     String?
-  viewCount    Int       @default(0)
-  rsvpCount    Int       @default(0)
-  createdAt    DateTime  @default(now())
+  id              String    @id @default(uuid())
+  eventId         String
+  templateId      String
+  title           String
+  subtitle        String?
+  hostName        String?
+  rsvpByDate      DateTime?
+  note            String?
+  customData      Json?
+  slug            String?   @unique
+  shareUrl        String?
+  qrDataUrl       String?
+  published       Boolean   @default(false)
+  showGuestPool   Boolean   @default(false)
+  plusOnesEnabled Boolean   @default(false)
+  mealPrefEnabled Boolean   @default(false)
+  viewCount       Int       @default(0)
+  rsvpCount       Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  event        Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  guests          Guest[]
+  inviteViews     InviteView[]
+}
+
+model InviteView {
+  id        String   @id @default(uuid())
+  inviteId  String
+  viewedAt  DateTime @default(now())
+  ipHash    String?
+
+  invite    Invite   @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+
+  @@index([inviteId, viewedAt])
 }
 
 // ─── Tracking Pixels ───────────────────────────────────────────

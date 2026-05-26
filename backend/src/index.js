@@ -20,7 +20,7 @@ import guestRoutes, { eventGuestRouter, publicGuestRouter } from './routes/guest
 import mediaRoutes from './routes/media.js';
 import whatsappRoutes from './routes/whatsapp.js';
 import analyticsRoutes from './routes/analytics.js';
-import inviteRoutes from './routes/invites.js';
+import inviteRoutes, { publicInviteRouter } from './routes/invites.js';
 import qrRoutes from './routes/qr.js';
 import teamRoutes from './routes/team.js';
 import storageRoutes from './routes/storage.js';
@@ -63,12 +63,14 @@ app.use(requestContext);
 // ─── Rate limiters ────────────────────────────────────────────
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false });
 const authLimiter   = rateLimit({ windowMs: 15 * 60 * 1000, max: 10,  standardHeaders: true, legacyHeaders: false });
-const galleryLimiter = rateLimit({ windowMs: 60 * 1000,      max: 60,  standardHeaders: true, legacyHeaders: false });
+const galleryLimiter  = rateLimit({ windowMs: 60 * 1000,      max: 60,   standardHeaders: true, legacyHeaders: false });
+const publicLimiter   = rateLimit({ windowMs: 60 * 1000,      max: 120,  standardHeaders: true, legacyHeaders: false });
 const webhookLimiter = rateLimit({ windowMs: 60 * 1000,      max: 5000, standardHeaders: true, legacyHeaders: false });
 
 app.use('/api/', globalLimiter);
 app.use('/api/auth', authLimiter);
 app.use('/api/invites/view', galleryLimiter);
+app.use('/api/public/invite', publicLimiter);
 app.use('/api/whatsapp/webhook', webhookLimiter);
 app.use('/api/qr/:id/scan', webhookLimiter);
 app.use('/api/pixels/fire', webhookLimiter);
@@ -86,6 +88,7 @@ app.use('/api/media', mediaRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/invites', inviteRoutes);
+app.use('/api/public', publicInviteRouter);
 app.use('/api/qr', qrRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/storage', storageRoutes);
