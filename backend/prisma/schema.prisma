@@ -105,6 +105,7 @@ model Studio {
   pixels             TrackingPixel[]
   whatsappTemplates  WhatsAppTemplate[]
   automationRules    AutomationRule[]
+  jobs               Job[]
 }
 
 enum PlanTier {
@@ -183,6 +184,7 @@ model Event {
   galleryTokens     GalleryToken[]
   editJobs          EditJob[]
   whatsappMessages  WhatsAppMessage[]
+  jobs              Job[]
 }
 
 enum EventType {
@@ -660,4 +662,47 @@ enum AutoTrigger {
   EVENT_START
   AFTER_EVENT
   PHOTO_READY
+}
+
+// ─── Generic Job tracking ──────────────────────────────────────
+// Covers report generation, notification batches, and future batch operations.
+// Face-detect and AI-edit batch progress is tracked by EditJob (B10).
+
+model Job {
+  id        String    @id @default(uuid())
+  studioId  String?
+  eventId   String?
+  type      JobType
+  status    JobStatus @default(PENDING)
+  total     Int       @default(0)
+  done      Int       @default(0)
+  failed    Int       @default(0)
+  payload   Json?     // input params
+  result    Json?     // output data (e.g. download URL)
+  error     String?
+  bullJobId String?   // BullMQ job ID for cross-referencing
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  studio    Studio?   @relation(fields: [studioId], references: [id], onDelete: SetNull)
+  event     Event?    @relation(fields: [eventId],  references: [id], onDelete: SetNull)
+
+  @@index([studioId])
+  @@index([eventId])
+  @@index([type, status])
+}
+
+enum JobType {
+  REPORT
+  NOTIFICATION_BATCH
+  WHATSAPP_BATCH
+  FACE_SCAN_BATCH
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
 }

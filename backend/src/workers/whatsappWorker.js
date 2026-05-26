@@ -1,27 +1,19 @@
 /**
- * WhatsApp Outbound Worker
- * Run as: node src/workers/whatsappWorker.js
+ * WhatsApp Outbound Worker.
  *
- * Consumes the 'whatsapp-jobs' BullMQ queue.
- * Each job has a name matching a MessageType (lowercase-hyphenated) and carries:
- *   { messageId, guestId, eventId }
+ * Exports:
+ *   processWhatsApp(job)  — processor for workers/index.js
+ *   cleanup()             — no-op (no dedicated publisher; uses shared queues)
  *
- * Job types:
- *   invite               — RSVP invite; interactive buttons in session, template outside
- *   rsvp-confirmation    — post-RSVP confirmation (always template)
- *   photo-ready          — photos matched; gallery link
- *   itinerary-reminder   — event reminder N hours before start
- *   gallery-link         — on-demand gallery link
- *   custom               — free text in session, or named template outside
+ * Standalone: node src/workers/whatsappWorker.js
  *
- * Session window (Meta rule):
- *   If the guest messaged us within the last 24 h, we can send free-form text.
- *   Otherwise we MUST use a Meta-approved template.
+ * Job types: invite, rsvp-confirmation, photo-ready,
+ *            itinerary-reminder, gallery-link, custom
  */
 
 import '../config/env.js';
 
-import { Worker } from 'bullmq';
+import { fileURLToPath } from 'node:url';
 
 import prisma             from '../lib/prisma.js';
 import { bullConnection } from '../lib/queues.js';
@@ -30,7 +22,9 @@ import { isInSession, setState } from '../lib/whatsappState.js';
 import env                from '../config/env.js';
 import logger             from '../lib/logger.js';
 
-// ─── Context helpers ─────────────────────────────────────────
+export function cleanup() { return Promise.resolve(); }
+
+// ─── Helpers ─────────────────────────────────────────────────
 
 function fmtDate(d) {
   if (!d) return 'TBD';
@@ -43,9 +37,7 @@ function fmtDate(d) {
 async function loadContext(messageId) {
   const msg = await prisma.whatsAppMessage.findUnique({
     where:   { id: messageId },
-    include: {
-      guest: { select: { id:true, name:true, phone:true, whatsappOptIn:true, eventId:true } },
-    },
+    include: { guest: { select: { id: true, name: true, phone: true, whatsappOptIn: true, eventId: true } } },
   });
 
   if (!msg) throw new Error(`WhatsAppMessage ${messageId} not found`);
@@ -67,7 +59,7 @@ async function loadContext(messageId) {
   const event   = eventId
     ? await prisma.event.findUnique({
         where:  { id: eventId },
-        select: { id:true, name:true, startDate:true, endDate:true, venue:true },
+        select: { id: true, name: true, startDate: true, endDate: true, venue: true },
       })
     : null;
 
@@ -77,21 +69,14 @@ async function loadContext(messageId) {
 async function markSent(messageId, result) {
   await prisma.whatsAppMessage.update({
     where: { id: messageId },
-    data:  {
-      status:      'SENT',
-      waMessageId: result?.messages?.[0]?.id ?? null,
-      sentAt:      new Date(),
-    },
+    data:  { status: 'SENT', waMessageId: result?.messages?.[0]?.id ?? null, sentAt: new Date() },
   });
 }
 
 async function markFailed(messageId, err) {
   await prisma.whatsAppMessage.update({
     where: { id: messageId },
-    data:  {
-      status:    'FAILED',
-      errorData: { message: err.message, status: err.status, code: err.data?.code },
-    },
+    data:  { status: 'FAILED', errorData: { message: err.message, status: err.status, code: err.data?.code } },
   });
 }
 
@@ -107,26 +92,20 @@ async function handleInvite({ messageId }) {
   const inSession = await isInSession(guest.phone);
   const tplName   = msg.templateName ?? 'eventra_invite_v1';
 
-  let result;
-  if (inSession) {
-    result = await wa.sendInteractive(
-      guest.phone,
-      `Hi ${guest.name ?? 'there'}! You're invited to *${eventName}* on ${eventDate}.\n\nWill you be attending?`,
-      [
-        { id: 'rsvp_yes', title: "Yes, I'll attend ✓" },
-        { id: 'rsvp_no',  title: "Sorry, can't make it" },
-      ],
-      `Invitation: ${eventName}`,
-    );
-  } else {
-    result = await wa.sendTemplate(guest.phone, tplName, 'en_US', [
-      { type: 'body', parameters: [
-        { type: 'text', text: guest.name ?? 'Guest' },
-        { type: 'text', text: eventName },
-        { type: 'text', text: eventDate },
-      ]},
-    ]);
-  }
+  const result = inSession
+    ? await wa.sendInteractive(
+        guest.phone,
+        `Hi ${guest.name ?? 'there'}! You're invited to *${eventName}* on ${eventDate}.\n\nWill you be attending?`,
+        [{ id: 'rsvp_yes', title: "Yes, I'll attend ✓" }, { id: 'rsvp_no', title: "Sorry, can't make it" }],
+        `Invitation: ${eventName}`,
+      )
+    : await wa.sendTemplate(guest.phone, tplName, 'en_US', [
+        { type: 'body', parameters: [
+          { type: 'text', text: guest.name ?? 'Guest' },
+          { type: 'text', text: eventName },
+          { type: 'text', text: eventDate },
+        ]},
+      ]);
 
   await markSent(messageId, result);
   await setState(guest.phone, 'awaiting_rsvp', { eventId, guestId: guest.id });
@@ -154,35 +133,21 @@ async function handlePhotoReady({ messageId }) {
   if (!ctx) return;
   const { msg, guest, event, eventId } = ctx;
 
-  const tokenRow = await prisma.galleryToken.findFirst({
-    where:  { guestId: guest.id, eventId },
-    select: { token: true },
-  });
-  const galleryUrl = tokenRow
-    ? `${env.FRONTEND_URL}/gallery/${tokenRow.token}`
-    : `${env.FRONTEND_URL}/gallery`;
+  const tokenRow   = await prisma.galleryToken.findFirst({ where: { guestId: guest.id, eventId }, select: { token: true } });
+  const galleryUrl = tokenRow ? `${env.FRONTEND_URL}/gallery/${tokenRow.token}` : `${env.FRONTEND_URL}/gallery`;
+  const inSession  = await isInSession(guest.phone);
 
-  const inSession = await isInSession(guest.phone);
-  let result;
-
-  if (inSession) {
-    result = await wa.sendText(
-      guest.phone,
-      `🎉 Your event photos are ready, ${guest.name ?? 'there'}!\n\nView your personalised gallery:\n${galleryUrl}\n\nLink valid for 7 days.`,
-    );
-  } else {
-    result = await wa.sendTemplate(
-      guest.phone, msg.templateName ?? 'eventra_photo_ready_v1', 'en_US',
-      [
+  const result = inSession
+    ? await wa.sendText(guest.phone,
+        `🎉 Your event photos are ready, ${guest.name ?? 'there'}!\n\nView your personalised gallery:\n${galleryUrl}\n\nLink valid for 7 days.`)
+    : await wa.sendTemplate(guest.phone, msg.templateName ?? 'eventra_photo_ready_v1', 'en_US', [
         { type: 'body', parameters: [
           { type: 'text', text: guest.name ?? 'Guest' },
           { type: 'text', text: event?.name ?? 'your event' },
         ]},
-        { type: 'button', sub_type: 'url', index: '0',
-          parameters: [{ type: 'text', text: tokenRow?.token ?? '' }] },
-      ],
-    );
-  }
+        { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: tokenRow?.token ?? '' }] },
+      ]);
+
   await markSent(messageId, result);
 }
 
@@ -208,35 +173,21 @@ async function handleGalleryLink({ messageId }) {
   if (!ctx) return;
   const { msg, guest, event, eventId } = ctx;
 
-  const tokenRow = await prisma.galleryToken.findFirst({
-    where:  { guestId: guest.id, eventId },
-    select: { token: true },
-  });
-  const galleryUrl = tokenRow
-    ? `${env.FRONTEND_URL}/gallery/${tokenRow.token}`
-    : `${env.FRONTEND_URL}/gallery`;
+  const tokenRow   = await prisma.galleryToken.findFirst({ where: { guestId: guest.id, eventId }, select: { token: true } });
+  const galleryUrl = tokenRow ? `${env.FRONTEND_URL}/gallery/${tokenRow.token}` : `${env.FRONTEND_URL}/gallery`;
+  const inSession  = await isInSession(guest.phone);
 
-  const inSession = await isInSession(guest.phone);
-  let result;
-
-  if (inSession) {
-    result = await wa.sendText(
-      guest.phone,
-      `Hi ${guest.name ?? 'there'}! Here's your gallery for *${event?.name ?? 'the event'}*:\n${galleryUrl}`,
-    );
-  } else {
-    result = await wa.sendTemplate(
-      guest.phone, msg.templateName ?? 'eventra_gallery_link_v1', 'en_US',
-      [
+  const result = inSession
+    ? await wa.sendText(guest.phone,
+        `Hi ${guest.name ?? 'there'}! Here's your gallery for *${event?.name ?? 'the event'}*:\n${galleryUrl}`)
+    : await wa.sendTemplate(guest.phone, msg.templateName ?? 'eventra_gallery_link_v1', 'en_US', [
         { type: 'body', parameters: [
           { type: 'text', text: guest.name ?? 'Guest' },
           { type: 'text', text: event?.name ?? 'your event' },
         ]},
-        { type: 'button', sub_type: 'url', index: '0',
-          parameters: [{ type: 'text', text: tokenRow?.token ?? '' }] },
-      ],
-    );
-  }
+        { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: tokenRow?.token ?? '' }] },
+      ]);
+
   await markSent(messageId, result);
 }
 
@@ -251,10 +202,7 @@ async function handleCustom({ messageId }) {
   if (inSession && msg.body) {
     result = await wa.sendText(guest.phone, msg.body);
   } else if (msg.templateName) {
-    result = await wa.sendTemplate(
-      guest.phone, msg.templateName, 'en_US',
-      msg.templateComponents ?? [],
-    );
+    result = await wa.sendTemplate(guest.phone, msg.templateName, 'en_US', msg.templateComponents ?? []);
   } else {
     await markFailed(messageId, new Error('No session window and no template configured'));
     return;
@@ -265,60 +213,62 @@ async function handleCustom({ messageId }) {
 // ─── Dispatch table ───────────────────────────────────────────
 
 const HANDLERS = {
-  'invite':              handleInvite,
-  'rsvp-confirmation':   handleRsvpConfirmation,
-  'rsvp_confirmation':   handleRsvpConfirmation,
-  'photo-ready':         handlePhotoReady,
-  'photo_ready':         handlePhotoReady,
-  'itinerary-reminder':  handleItineraryReminder,
-  'itinerary_reminder':  handleItineraryReminder,
-  'gallery-link':        handleGalleryLink,
-  'gallery_link':        handleGalleryLink,
-  'custom':              handleCustom,
+  'invite':             handleInvite,
+  'rsvp-confirmation':  handleRsvpConfirmation,
+  'rsvp_confirmation':  handleRsvpConfirmation,
+  'photo-ready':        handlePhotoReady,
+  'photo_ready':        handlePhotoReady,
+  'itinerary-reminder': handleItineraryReminder,
+  'itinerary_reminder': handleItineraryReminder,
+  'gallery-link':       handleGalleryLink,
+  'gallery_link':       handleGalleryLink,
+  'custom':             handleCustom,
 };
 
-// ─── Worker ──────────────────────────────────────────────────
+// ─── Exported processor ───────────────────────────────────────
 
-const worker = new Worker(
-  'whatsapp-jobs',
-  async job => {
-    logger.info({ jobId: job.id, name: job.name }, '[whatsappWorker] processing');
-    const handler = HANDLERS[job.name];
-    if (!handler) {
-      logger.warn({ name: job.name }, '[whatsappWorker] unknown job type, skipping');
-      return;
+export async function processWhatsApp(job) {
+  logger.info({ jobId: job.id, name: job.name }, '[whatsappWorker] processing');
+  const handler = HANDLERS[job.name];
+  if (!handler) {
+    logger.warn({ name: job.name }, '[whatsappWorker] unknown job type, skipping');
+    return;
+  }
+  try {
+    await handler(job.data);
+  } catch (err) {
+    if (job.data?.messageId) {
+      await markFailed(job.data.messageId, err).catch(() => {});
     }
-    try {
-      await handler(job.data);
-    } catch (err) {
-      // Persist failure so the UI can show it even if BullMQ retries
-      if (job.data?.messageId) {
-        await markFailed(job.data.messageId, err).catch(() => {});
-      }
-      throw err; // re-throw so BullMQ retries according to job options
-    }
-  },
-  { connection: bullConnection, concurrency: 3 },
-);
-
-worker.on('completed', job =>
-  logger.info({ jobId: job.id, name: job.name }, '[whatsappWorker] completed'),
-);
-worker.on('failed', (job, err) =>
-  logger.error({ jobId: job?.id, name: job?.name, err }, '[whatsappWorker] failed'),
-);
-worker.on('error', err =>
-  logger.error({ err }, '[whatsappWorker] worker error'),
-);
-
-logger.info('[whatsappWorker] started — listening on whatsapp-jobs queue');
-
-async function shutdown(signal) {
-  logger.info(`[whatsappWorker] ${signal} — draining`);
-  await worker.close();
-  await prisma.$disconnect();
-  process.exit(0);
+    throw err;
+  }
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+// ─── Standalone runner ────────────────────────────────────────
+
+const __file = fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/') === __file;
+
+if (isMain) {
+  const { Worker } = await import('bullmq');
+
+  const worker = new Worker('whatsapp-jobs', processWhatsApp, {
+    connection:  bullConnection,
+    concurrency: 10,
+    limiter:     { max: 80, duration: 1_000 },
+  });
+
+  worker.on('completed', job => logger.info({ jobId: job.id, name: job.name }, '[whatsappWorker] completed'));
+  worker.on('failed',    (job, err) => logger.error({ jobId: job?.id, name: job?.name, err }, '[whatsappWorker] failed'));
+  worker.on('error',     err => logger.error({ err }, '[whatsappWorker] worker error'));
+  logger.info('[whatsappWorker] started standalone — listening on whatsapp-jobs');
+
+  const shutdown = async signal => {
+    logger.info(`[whatsappWorker] ${signal} — draining`);
+    await worker.close();
+    await prisma.$disconnect();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
+}

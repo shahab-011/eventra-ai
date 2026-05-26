@@ -26,19 +26,23 @@ import crypto    from 'node:crypto';
 import { Router } from 'express';
 import { z }     from 'zod';
 import { randomUUID } from 'node:crypto';
+import IORedis   from 'ioredis';
 
 import prisma          from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { validate }    from '../lib/validate.js';
 import { notFound, forbidden, badRequest, AppError } from '../lib/errors.js';
 import { parsePagination } from '../lib/pagination.js';
-import { whatsappQueue }   from '../lib/queues.js';
-import { faceDetectQueue, processMediaQueue } from '../lib/queues.js';
+import { whatsappQueue, faceDetectQueue, processMediaQueue } from '../lib/queues.js';
 import { getState, setState, clearState, touchSession, isInSession } from '../lib/whatsappState.js';
 import * as wa from '../services/whatsappApi.js';
 import { putObject, cdnUrl } from '../services/r2.js';
 import env from '../config/env.js';
 import logger from '../lib/logger.js';
+
+// Shared Redis client for idempotency keys (separate from BullMQ connection)
+const redis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
+redis.on('error', err => logger.warn({ err }, '[whatsapp] Redis error'));
 
 const router = Router();
 
@@ -397,6 +401,13 @@ async function processWebhookPayload(body) {
       // Inbound messages
       for (const message of value.messages ?? []) {
         const contact = value.contacts?.[0];
+        // Idempotency: skip if we already processed this WhatsApp message ID
+        const dedupKey = `wa:processed:${message.id}`;
+        const isNew    = await redis.set(dedupKey, '1', 'EX', 86400, 'NX');
+        if (!isNew) {
+          logger.info({ waId: message.id }, '[webhook] duplicate message, skipping');
+          continue;
+        }
         await processInboundMessage(message, contact).catch(err =>
           logger.error({ err, waId: message.id }, '[webhook] inbound message failed'),
         );

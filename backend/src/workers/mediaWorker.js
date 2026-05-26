@@ -1,57 +1,58 @@
 /**
- * Media processing worker — run as a separate process:
+ * Media processing worker.
+ *
+ * Exports:
+ *   processMedia(job)  — processor consumed by workers/index.js
+ *   cleanup()          — closes the Redis publisher (called by index.js on shutdown)
+ *
+ * Standalone entry point (npm run worker:media):
  *   node src/workers/mediaWorker.js
- *
- * Requires:
- *   - ffmpeg binary in PATH (for video transcoding)
- *   - All env vars loaded (DATABASE_URL, REDIS_URL, R2_* etc.)
- *
- * For each process-media job:
- *   Images → sharp: thumb 400px + web 1600px + optional watermark + EXIF
- *   Videos → ffmpeg: poster frame + 720p web variant (original 4K kept intact)
- *   Both  → update Media row to READY + enqueue detect-faces for images
  */
 
-import '../config/env.js';          // load & validate .env before anything else
+import '../config/env.js';
 
-import { Worker }      from 'bullmq';
-import { createWriteStream, createReadStream, promises as fs } from 'node:fs';
-import { tmpdir }      from 'node:os';
+import { createWriteStream, promises as fs } from 'node:fs';
+import { tmpdir }       from 'node:os';
 import { join, extname } from 'node:path';
-import { pipeline }    from 'node:stream/promises';
-import { randomUUID }  from 'node:crypto';
-import sharp           from 'sharp';
-import ffmpeg          from 'fluent-ffmpeg';
+import { randomUUID }   from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import sharp            from 'sharp';
+import ffmpeg           from 'fluent-ffmpeg';
 import { parse as parseExif } from 'exifr';
-import IORedis         from 'ioredis';
+import IORedis          from 'ioredis';
 
-import prisma          from '../lib/prisma.js';
+import prisma              from '../lib/prisma.js';
 import { bullConnection, faceDetectQueue } from '../lib/queues.js';
-import {
-  getObjectBuffer,
-  putObject,
-  cdnUrl,
-} from '../services/r2.js';
-import logger          from '../lib/logger.js';
-import env             from '../config/env.js';
+import { getObjectBuffer, putObject, cdnUrl } from '../services/r2.js';
+import logger              from '../lib/logger.js';
+import env                 from '../config/env.js';
 
-// ─── Redis publisher (inter-process socket relay) ─────────────
+// ─── Redis publisher (inter-process Socket.IO relay) ──────────
+
 const publisher = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
-publisher.on('error', err => logger.warn({ err }, '[worker] Redis publisher error'));
+publisher.on('error', err => logger.warn({ err }, '[mediaWorker] Redis error'));
+
+export function cleanup() { return publisher.quit(); }
 
 async function emitToEventRoom(eventId, event, data) {
   await publisher.publish('media:events', JSON.stringify({
-    room: `event:${eventId}`,
-    event,
-    data,
+    room: `event:${eventId}`, event, data,
   }));
 }
 
-// ─── Watermark helper ─────────────────────────────────────────
+// ─── MIME sets ────────────────────────────────────────────────
+
+export const IMAGE_MIMES = new Set([
+  'image/jpeg', 'image/jpg', 'image/png',
+  'image/gif',  'image/webp', 'image/heic', 'image/heif',
+]);
+export const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime']);
+
+// ─── Watermark ────────────────────────────────────────────────
 
 async function applyWatermark(webBuffer, { watermarkUrl, studioName }) {
   const meta = await sharp(webBuffer).metadata();
-  const w = meta.width ?? 1600;
+  const w = meta.width  ?? 1600;
   const h = meta.height ?? 1067;
 
   let overlayInput;
@@ -82,14 +83,13 @@ async function applyWatermark(webBuffer, { watermarkUrl, studioName }) {
     .toBuffer();
 }
 
-// ─── Image processing ─────────────────────────────────────────
+// ─── Image ────────────────────────────────────────────────────
 
 async function processImage(job) {
   const { mediaId, eventId, key, mimeType, watermarkEnabled, watermarkUrl, studioName } = job.data;
 
   const originalBuffer = await getObjectBuffer(key);
 
-  // EXIF
   let takenAt, width, height;
   try {
     const exif = await parseExif(originalBuffer, {
@@ -100,23 +100,20 @@ async function processImage(job) {
     height  = exif?.ExifImageHeight  ?? exif?.ImageHeight  ?? null;
   } catch { /* non-fatal */ }
 
-  // Get actual dimensions from sharp if EXIF didn't have them
   if (!width || !height) {
     const meta = await sharp(originalBuffer).metadata();
     width  = meta.width  ?? null;
     height = meta.height ?? null;
   }
 
-  // Thumbnail — 400px wide, JPEG
   const thumbKey    = `events/${eventId}/thumbs/${mediaId}.jpg`;
   const thumbBuffer = await sharp(originalBuffer)
     .resize(400, null, { withoutEnlargement: true })
-    .rotate()                 // auto-orient from EXIF
+    .rotate()
     .jpeg({ quality: 80, mozjpeg: true })
     .toBuffer();
   const thumbnailUrl = await putObject(thumbKey, thumbBuffer, 'image/jpeg');
 
-  // Web variant — 1600px wide, JPEG
   const webKey    = `events/${eventId}/web/${mediaId}.jpg`;
   const webBuffer = await sharp(originalBuffer)
     .resize(1600, null, { withoutEnlargement: true })
@@ -125,7 +122,6 @@ async function processImage(job) {
     .toBuffer();
   const processedUrl = await putObject(webKey, webBuffer, 'image/jpeg');
 
-  // Watermark
   let wmUrl = null;
   if (watermarkEnabled) {
     const wmKey    = `events/${eventId}/wm/${mediaId}.jpg`;
@@ -133,34 +129,20 @@ async function processImage(job) {
     wmUrl          = await putObject(wmKey, wmBuffer, 'image/jpeg');
   }
 
-  // Persist
   await prisma.media.update({
     where: { id: mediaId },
-    data:  {
-      status:       'READY',
-      thumbnailUrl,
-      processedUrl,
-      wmUrl,
-      width,
-      height,
-      takenAt:      takenAt ?? null,
-    },
+    data:  { status: 'READY', thumbnailUrl, processedUrl, wmUrl, width, height, takenAt: takenAt ?? null },
   });
 
-  // Enqueue face detection (module B7)
   await faceDetectQueue.add('detect', {
-    mediaId,
-    eventId,
-    key:          thumbKey,   // run detection on the thumbnail (smaller download)
-    thumbnailUrl,
+    mediaId, eventId, key: thumbKey, thumbnailUrl,
   }, { jobId: `face-${mediaId}` });
 
   await emitToEventRoom(eventId, 'media:ready', { mediaId, eventId, thumbnailUrl, processedUrl, wmUrl });
-
-  logger.info({ mediaId, eventId }, '[worker] image processed');
+  logger.info({ mediaId, eventId }, '[mediaWorker] image processed');
 }
 
-// ─── Video processing ─────────────────────────────────────────
+// ─── Video ────────────────────────────────────────────────────
 
 async function processVideo(job) {
   const { mediaId, eventId, key, watermarkEnabled, watermarkUrl, studioName } = job.data;
@@ -172,134 +154,97 @@ async function processVideo(job) {
   const webPath   = join(tmpDir, `${randomUUID()}.mp4`);
 
   try {
-    // Download original to temp file (ffmpeg requires file path)
     const buf = await getObjectBuffer(key);
     await fs.writeFile(inputPath, buf);
 
-    // Poster frame at 1 second
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
         .screenshots({ count: 1, timemarks: ['00:00:01'], filename: thumbPath })
-        .on('end',   resolve)
-        .on('error', reject);
+        .on('end', resolve).on('error', reject);
     });
 
-    // 720p web variant — keep original 4K untouched
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
-        .videoCodec('libx264')
-        .audioCodec('aac')
-        .outputOptions([
-          '-vf', 'scale=\'min(1280,iw)\':-2',
-          '-crf', '23',
-          '-preset', 'fast',
-          '-movflags', '+faststart',
-        ])
+        .videoCodec('libx264').audioCodec('aac')
+        .outputOptions(['-vf', "scale='min(1280,iw)':-2", '-crf', '23', '-preset', 'fast', '-movflags', '+faststart'])
         .output(webPath)
-        .on('end',   resolve)
-        .on('error', reject);
+        .on('end', resolve).on('error', reject);
     });
 
-    // ffprobe metadata for dimensions
     let width = null, height = null;
     await new Promise(resolve => {
       ffmpeg.ffprobe(inputPath, (err, meta) => {
         if (!err) {
           const vs = meta.streams?.find(s => s.codec_type === 'video');
-          width  = vs?.width  ?? null;
-          height = vs?.height ?? null;
+          width = vs?.width ?? null; height = vs?.height ?? null;
         }
         resolve();
       });
     });
 
-    // Upload poster frame
-    const thumbKey    = `events/${eventId}/thumbs/${mediaId}.jpg`;
-    const thumbBuffer = await fs.readFile(thumbPath);
-    const thumbnailUrl = await putObject(thumbKey, thumbBuffer, 'image/jpeg');
-
-    // Upload 720p variant
-    const webKey    = `events/${eventId}/web/${mediaId}.mp4`;
-    const webBuffer = await fs.readFile(webPath);
-    const processedUrl = await putObject(webKey, webBuffer, 'video/mp4');
+    const thumbKey     = `events/${eventId}/thumbs/${mediaId}.jpg`;
+    const thumbnailUrl = await putObject(thumbKey, await fs.readFile(thumbPath), 'image/jpeg');
+    const webKey       = `events/${eventId}/web/${mediaId}.mp4`;
+    const processedUrl = await putObject(webKey,   await fs.readFile(webPath),   'video/mp4');
 
     await prisma.media.update({
       where: { id: mediaId },
       data:  { status: 'READY', thumbnailUrl, processedUrl, width, height },
     });
-
     await emitToEventRoom(eventId, 'media:ready', { mediaId, eventId, thumbnailUrl, processedUrl });
-
-    logger.info({ mediaId, eventId }, '[worker] video processed');
+    logger.info({ mediaId, eventId }, '[mediaWorker] video processed');
   } finally {
-    // Always clean up temp files
-    await Promise.allSettled([
-      fs.unlink(inputPath),
-      fs.unlink(thumbPath),
-      fs.unlink(webPath),
-    ]);
+    await Promise.allSettled([fs.unlink(inputPath), fs.unlink(thumbPath), fs.unlink(webPath)]);
   }
 }
 
-// ─── Worker ───────────────────────────────────────────────────
+// ─── Exported processor ───────────────────────────────────────
 
-const worker = new Worker(
-  'process-media',
-  async job => {
-    const { mediaId, mimeType } = job.data;
-    logger.info({ mediaId, mimeType }, '[worker] processing job');
+export async function processMedia(job) {
+  const { mediaId, mimeType } = job.data;
+  logger.info({ mediaId, mimeType }, '[mediaWorker] processing job');
 
-    try {
-      if (IMAGE_MIMES.has(mimeType)) {
-        await processImage(job);
-      } else if (VIDEO_MIMES.has(mimeType)) {
-        await processVideo(job);
-      } else {
-        throw new Error(`Unsupported MIME type: ${mimeType}`);
-      }
-    } catch (err) {
-      logger.error({ err, mediaId }, '[worker] processing failed');
-      await prisma.media.update({
-        where: { id: mediaId },
-        data:  { status: 'FAILED' },
-      }).catch(() => {});
-      throw err; // BullMQ will retry per backoff config
-    }
-  },
-  {
-    connection:  bullConnection,
-    concurrency: 4,            // process up to 4 jobs in parallel
-  },
-);
-
-const IMAGE_MIMES = new Set([
-  'image/jpeg', 'image/jpg', 'image/png',
-  'image/gif',  'image/webp', 'image/heic', 'image/heif',
-]);
-const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime']);
-
-worker.on('completed', job => {
-  logger.info({ jobId: job.id, mediaId: job.data.mediaId }, '[worker] job completed');
-});
-
-worker.on('failed', (job, err) => {
-  logger.error({ jobId: job?.id, mediaId: job?.data?.mediaId, err }, '[worker] job failed');
-});
-
-worker.on('error', err => {
-  logger.error({ err }, '[worker] worker error');
-});
-
-logger.info('[worker] media worker started — waiting for jobs');
-
-// Graceful shutdown
-async function shutdown(signal) {
-  logger.info(`[worker] ${signal} received — draining...`);
-  await worker.close();
-  await publisher.quit();
-  await prisma.$disconnect();
-  process.exit(0);
+  try {
+    if (IMAGE_MIMES.has(mimeType))      await processImage(job);
+    else if (VIDEO_MIMES.has(mimeType)) await processVideo(job);
+    else throw new Error(`Unsupported MIME type: ${mimeType}`);
+  } catch (err) {
+    logger.error({ err, mediaId }, '[mediaWorker] processing failed');
+    await prisma.media.update({ where: { id: mediaId }, data: { status: 'FAILED' } }).catch(() => {});
+    throw err;
+  }
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+// ─── Standalone runner ────────────────────────────────────────
+
+const __file = fileURLToPath(import.meta.url).replace(/\\/g, '/');
+const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/') === __file;
+
+if (isMain) {
+  const { Worker } = await import('bullmq');
+
+  const worker = new Worker('process-media', processMedia, {
+    connection:  bullConnection,
+    concurrency: 4,
+  });
+
+  worker.on('completed', job =>
+    logger.info({ jobId: job.id, mediaId: job.data.mediaId }, '[mediaWorker] completed'),
+  );
+  worker.on('failed', (job, err) =>
+    logger.error({ jobId: job?.id, mediaId: job?.data?.mediaId, err }, '[mediaWorker] failed'),
+  );
+  worker.on('error', err => logger.error({ err }, '[mediaWorker] worker error'));
+
+  logger.info('[mediaWorker] started standalone — listening on process-media');
+
+  const shutdown = async signal => {
+    logger.info(`[mediaWorker] ${signal} — draining`);
+    await worker.close();
+    await cleanup();
+    await prisma.$disconnect();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
+}
