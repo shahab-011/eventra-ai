@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import prisma             from '../lib/prisma.js';
 import { bullConnection } from '../lib/queues.js';
+import { publishToEvent, publishToStudio } from '../lib/realtime.js';
 import * as wa            from '../services/whatsappApi.js';
 import { isInSession, setState } from '../lib/whatsappState.js';
 import env                from '../config/env.js';
@@ -59,18 +60,24 @@ async function loadContext(messageId) {
   const event   = eventId
     ? await prisma.event.findUnique({
         where:  { id: eventId },
-        select: { id: true, name: true, startDate: true, endDate: true, venue: true },
+        select: { id: true, name: true, startDate: true, endDate: true, venue: true, studioId: true },
       })
     : null;
 
-  return { msg, guest: msg.guest, event, eventId };
+  return { msg, guest: msg.guest, event, eventId, studioId: event?.studioId ?? null };
 }
 
-async function markSent(messageId, result) {
+async function markSent(messageId, result, ctx = {}) {
+  const waMessageId = result?.messages?.[0]?.id ?? null;
   await prisma.whatsAppMessage.update({
     where: { id: messageId },
-    data:  { status: 'SENT', waMessageId: result?.messages?.[0]?.id ?? null, sentAt: new Date() },
+    data:  { status: 'SENT', waMessageId, sentAt: new Date() },
   });
+  // Broadcast delivery status update to the studio and event dashboards
+  const { guestId, eventId, studioId } = ctx;
+  const payload = { messageId, guestId, eventId, status: 'SENT', waMessageId };
+  if (eventId)  await publishToEvent(eventId,   'delivery:update', payload).catch(() => {});
+  if (studioId) await publishToStudio(studioId, 'delivery:update', payload).catch(() => {});
 }
 
 async function markFailed(messageId, err) {
@@ -85,7 +92,7 @@ async function markFailed(messageId, err) {
 async function handleInvite({ messageId }) {
   const ctx = await loadContext(messageId);
   if (!ctx) return;
-  const { msg, guest, event, eventId } = ctx;
+  const { msg, guest, event, eventId, studioId } = ctx;
 
   const eventName = event?.name ?? 'your upcoming event';
   const eventDate = fmtDate(event?.startDate);
@@ -107,14 +114,14 @@ async function handleInvite({ messageId }) {
         ]},
       ]);
 
-  await markSent(messageId, result);
+  await markSent(messageId, result, { guestId: guest.id, eventId, studioId });
   await setState(guest.phone, 'awaiting_rsvp', { eventId, guestId: guest.id });
 }
 
 async function handleRsvpConfirmation({ messageId }) {
   const ctx = await loadContext(messageId);
   if (!ctx) return;
-  const { msg, guest, event } = ctx;
+  const { msg, guest, event, eventId, studioId } = ctx;
 
   const result = await wa.sendTemplate(
     guest.phone, msg.templateName ?? 'eventra_rsvp_confirm_v1', 'en_US',
@@ -125,13 +132,13 @@ async function handleRsvpConfirmation({ messageId }) {
       { type: 'text', text: event?.venue ?? 'the venue' },
     ]}],
   );
-  await markSent(messageId, result);
+  await markSent(messageId, result, { guestId: guest.id, eventId, studioId });
 }
 
 async function handlePhotoReady({ messageId }) {
   const ctx = await loadContext(messageId);
   if (!ctx) return;
-  const { msg, guest, event, eventId } = ctx;
+  const { msg, guest, event, eventId, studioId } = ctx;
 
   const tokenRow   = await prisma.galleryToken.findFirst({ where: { guestId: guest.id, eventId }, select: { token: true } });
   const galleryUrl = tokenRow ? `${env.FRONTEND_URL}/gallery/${tokenRow.token}` : `${env.FRONTEND_URL}/gallery`;
@@ -148,13 +155,13 @@ async function handlePhotoReady({ messageId }) {
         { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: tokenRow?.token ?? '' }] },
       ]);
 
-  await markSent(messageId, result);
+  await markSent(messageId, result, { guestId: guest.id, eventId, studioId });
 }
 
 async function handleItineraryReminder({ messageId }) {
   const ctx = await loadContext(messageId);
   if (!ctx) return;
-  const { msg, guest, event } = ctx;
+  const { msg, guest, event, eventId, studioId } = ctx;
 
   const result = await wa.sendTemplate(
     guest.phone, msg.templateName ?? 'eventra_itinerary_v1', 'en_US',
@@ -165,13 +172,13 @@ async function handleItineraryReminder({ messageId }) {
       { type: 'text', text: event?.venue ?? 'the venue' },
     ]}],
   );
-  await markSent(messageId, result);
+  await markSent(messageId, result, { guestId: guest.id, eventId, studioId });
 }
 
 async function handleGalleryLink({ messageId }) {
   const ctx = await loadContext(messageId);
   if (!ctx) return;
-  const { msg, guest, event, eventId } = ctx;
+  const { msg, guest, event, eventId, studioId } = ctx;
 
   const tokenRow   = await prisma.galleryToken.findFirst({ where: { guestId: guest.id, eventId }, select: { token: true } });
   const galleryUrl = tokenRow ? `${env.FRONTEND_URL}/gallery/${tokenRow.token}` : `${env.FRONTEND_URL}/gallery`;
@@ -188,13 +195,13 @@ async function handleGalleryLink({ messageId }) {
         { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: tokenRow?.token ?? '' }] },
       ]);
 
-  await markSent(messageId, result);
+  await markSent(messageId, result, { guestId: guest.id, eventId, studioId });
 }
 
 async function handleCustom({ messageId }) {
   const ctx = await loadContext(messageId);
   if (!ctx) return;
-  const { msg, guest } = ctx;
+  const { msg, guest, eventId, studioId } = ctx;
 
   const inSession = await isInSession(guest.phone);
   let result;
@@ -207,7 +214,7 @@ async function handleCustom({ messageId }) {
     await markFailed(messageId, new Error('No session window and no template configured'));
     return;
   }
-  await markSent(messageId, result);
+  await markSent(messageId, result, { guestId: guest.id, eventId, studioId });
 }
 
 // ─── Dispatch table ───────────────────────────────────────────

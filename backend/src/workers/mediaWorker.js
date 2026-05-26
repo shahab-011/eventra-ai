@@ -11,34 +11,23 @@
 
 import '../config/env.js';
 
-import { createWriteStream, promises as fs } from 'node:fs';
-import { tmpdir }       from 'node:os';
-import { join, extname } from 'node:path';
-import { randomUUID }   from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import sharp            from 'sharp';
-import ffmpeg           from 'fluent-ffmpeg';
+import { promises as fs }  from 'node:fs';
+import { tmpdir }           from 'node:os';
+import { join, extname }    from 'node:path';
+import { randomUUID }       from 'node:crypto';
+import { fileURLToPath }    from 'node:url';
+import sharp                from 'sharp';
+import ffmpeg               from 'fluent-ffmpeg';
 import { parse as parseExif } from 'exifr';
-import IORedis          from 'ioredis';
 
-import prisma              from '../lib/prisma.js';
+import prisma               from '../lib/prisma.js';
 import { bullConnection, faceDetectQueue } from '../lib/queues.js';
+import { publishToEvent, publishSlideshow } from '../lib/realtime.js';
 import { getObjectBuffer, putObject, cdnUrl } from '../services/r2.js';
-import logger              from '../lib/logger.js';
-import env                 from '../config/env.js';
+import logger               from '../lib/logger.js';
 
-// ─── Redis publisher (inter-process Socket.IO relay) ──────────
-
-const publisher = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
-publisher.on('error', err => logger.warn({ err }, '[mediaWorker] Redis error'));
-
-export function cleanup() { return publisher.quit(); }
-
-async function emitToEventRoom(eventId, event, data) {
-  await publisher.publish('media:events', JSON.stringify({
-    room: `event:${eventId}`, event, data,
-  }));
-}
+// No local Redis publisher — all events go through lib/realtime.js
+export function cleanup() { return Promise.resolve(); }
 
 // ─── MIME sets ────────────────────────────────────────────────
 
@@ -138,7 +127,9 @@ async function processImage(job) {
     mediaId, eventId, key: thumbKey, thumbnailUrl,
   }, { jobId: `face-${mediaId}` });
 
-  await emitToEventRoom(eventId, 'media:ready', { mediaId, eventId, thumbnailUrl, processedUrl, wmUrl });
+  const processedPayload = { mediaId, eventId, thumbnailUrl, processedUrl, wmUrl };
+  await publishToEvent(eventId, 'media:processed', processedPayload);
+  await publishSlideshow(eventId, 'slideshow:newPhoto', { mediaId, eventId, thumbnailUrl, processedUrl });
   logger.info({ mediaId, eventId }, '[mediaWorker] image processed');
 }
 
@@ -191,7 +182,7 @@ async function processVideo(job) {
       where: { id: mediaId },
       data:  { status: 'READY', thumbnailUrl, processedUrl, width, height },
     });
-    await emitToEventRoom(eventId, 'media:ready', { mediaId, eventId, thumbnailUrl, processedUrl });
+    await publishToEvent(eventId, 'media:processed', { mediaId, eventId, thumbnailUrl, processedUrl });
     logger.info({ mediaId, eventId }, '[mediaWorker] video processed');
   } finally {
     await Promise.allSettled([fs.unlink(inputPath), fs.unlink(thumbPath), fs.unlink(webPath)]);

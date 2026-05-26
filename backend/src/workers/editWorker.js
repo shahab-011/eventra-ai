@@ -10,25 +10,17 @@
 
 import '../config/env.js';
 
-import { fileURLToPath } from 'node:url';
-import IORedis           from 'ioredis';
+import { fileURLToPath }  from 'node:url';
 
-import prisma            from '../lib/prisma.js';
+import prisma             from '../lib/prisma.js';
 import { bullConnection } from '../lib/queues.js';
+import { publishToEvent } from '../lib/realtime.js';
 import { putObject, cdnUrl } from '../services/r2.js';
 import env               from '../config/env.js';
-import logger            from '../lib/logger.js';
+import logger             from '../lib/logger.js';
 
-// ─── Redis publisher ──────────────────────────────────────────
-
-const publisher = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
-publisher.on('error', err => logger.warn({ err }, '[editWorker] Redis error'));
-
-export function cleanup() { return publisher.quit(); }
-
-async function emit(eventId, event, data) {
-  await publisher.publish('media:events', JSON.stringify({ room: `event:${eventId}`, event, data }));
-}
+// No local Redis publisher — all events go through lib/realtime.js
+export function cleanup() { return Promise.resolve(); }
 
 // ─── AI service helper ────────────────────────────────────────
 
@@ -96,7 +88,7 @@ async function autoEditBatch({ editJobId, eventId, mediaIds, lut = 'natural', pa
 
       done++;
       await prisma.editJob.update({ where: { id: editJobId }, data: { done, failed } });
-      await emit(eventId, 'edit:progress', { editJobId, mediaId, done, total: mediaIds.length, editedUrl });
+      await publishToEvent(eventId, 'edit:progress', { editJobId, mediaId, done, total: mediaIds.length, editedUrl });
 
     } catch (err) {
       logger.error({ err, mediaId }, '[editWorker] auto-edit failed for image');
@@ -109,7 +101,7 @@ async function autoEditBatch({ editJobId, eventId, mediaIds, lut = 'natural', pa
     where: { id: editJobId },
     data:  { status: failed === mediaIds.length ? 'FAILED' : 'DONE', done, failed },
   });
-  await emit(eventId, 'edit:done', { editJobId, done, failed, total: mediaIds.length });
+  await publishToEvent(eventId, 'edit:done', { editJobId, done, failed, total: mediaIds.length });
   logger.info({ editJobId, eventId, done, failed }, '[editWorker] auto-edit-batch done');
 }
 
@@ -159,7 +151,7 @@ async function autoCull({ editJobId, eventId }) {
     done++;
     if (done % 10 === 0) {
       await prisma.editJob.update({ where: { id: editJobId }, data: { done } });
-      await emit(eventId, 'cull:progress', { editJobId, done, total: images.length });
+      await publishToEvent(eventId, 'cull:progress', { editJobId, done, total: images.length });
     }
   }
 
@@ -203,7 +195,7 @@ async function autoCull({ editJobId, eventId }) {
     where: { id: editJobId },
     data:  { status: 'DONE', done: images.length, params: { kept: keepIds.size, suggestedReject: rejectIds.length } },
   });
-  await emit(eventId, 'cull:done', { editJobId, total: images.length, kept: keepIds.size, suggestedReject: rejectIds.length });
+  await publishToEvent(eventId, 'cull:done', { editJobId, total: images.length, kept: keepIds.size, suggestedReject: rejectIds.length });
   logger.info({ editJobId, eventId, kept: keepIds.size, suggestedReject: rejectIds.length }, '[editWorker] auto-cull done');
 }
 

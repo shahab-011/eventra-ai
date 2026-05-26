@@ -20,6 +20,16 @@ import { streamUpload } from './services/r2.js';
 import { processMediaQueue } from './lib/queues.js';
 import { getIO }       from './lib/socket.js';
 
+// FTP server runs in-process with the API, so we use getIO() directly.
+// camera:status is emitted on the camera's own room AND the event room.
+function emitCameraStatus(camera, status) {
+  const io = getIO();
+  if (!io) return;
+  const payload = { cameraId: camera.id, cameraName: camera.name, status, eventId: camera.eventId };
+  io.to(`camera:${camera.id}`).emit('camera:status', payload);
+  if (camera.eventId) io.to(`event:${camera.eventId}`).emit('camera:status', payload);
+}
+
 // ─── MIME sniff from extension ────────────────────────────────
 
 const MIME_MAP = {
@@ -186,6 +196,7 @@ export function startFTPServer() {
       });
 
       logger.info({ cameraId: camera.id, username }, '[ftpServer] camera connected');
+      emitCameraStatus(camera, 'CONNECTED');
       resolve({ fs: new CameraFS(camera) });
     } catch (err) {
       logger.error({ err, username }, '[ftpServer] login error');
@@ -197,13 +208,14 @@ export function startFTPServer() {
     try {
       const camera = await prisma.cameraAccount.findUnique({
         where:  { ftpUsername: username },
-        select: { id: true },
+        select: { id: true, name: true, eventId: true },
       });
       if (camera) {
         await prisma.cameraAccount.update({
           where: { id: camera.id },
           data:  { status: 'DISCONNECTED' },
         });
+        emitCameraStatus(camera, 'DISCONNECTED');
       }
     } catch (_) { /* non-fatal */ }
   });

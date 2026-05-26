@@ -10,25 +10,17 @@
 
 import '../config/env.js';
 
-import { randomUUID }  from 'node:crypto';
+import { randomUUID }    from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import IORedis         from 'ioredis';
 
-import prisma          from '../lib/prisma.js';
+import prisma            from '../lib/prisma.js';
 import { bullConnection, whatsappQueue } from '../lib/queues.js';
-import env             from '../config/env.js';
-import logger          from '../lib/logger.js';
+import { publishToEvent } from '../lib/realtime.js';
+import env               from '../config/env.js';
+import logger            from '../lib/logger.js';
 
-// ─── Redis publisher ──────────────────────────────────────────
-
-const publisher = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
-publisher.on('error', err => logger.warn({ err }, '[aiWorker] Redis error'));
-
-export function cleanup() { return publisher.quit(); }
-
-async function emit(eventId, event, data) {
-  await publisher.publish('media:events', JSON.stringify({ room: `event:${eventId}`, event, data }));
-}
+// No local Redis publisher — all events go through lib/realtime.js
+export function cleanup() { return Promise.resolve(); }
 
 // ─── AI service helper ────────────────────────────────────────
 
@@ -72,7 +64,7 @@ async function detectFaces({ mediaId, eventId }) {
 
   if (faces.length === 0) {
     await prisma.media.update({ where: { id: mediaId }, data: { aiProcessed: true } });
-    await emit(eventId, 'face:progress', { mediaId, facesDetected: 0 });
+    await publishToEvent(eventId, 'face:progress', { mediaId, facesDetected: 0 });
     return;
   }
 
@@ -129,7 +121,7 @@ async function detectFaces({ mediaId, eventId }) {
   }
 
   await prisma.media.update({ where: { id: mediaId }, data: { aiProcessed: true } });
-  await emit(eventId, 'face:progress', { mediaId, facesDetected: faces.length, embeddings: vectorIds.length });
+  await publishToEvent(eventId, 'face:progress', { mediaId, facesDetected: faces.length, embeddings: vectorIds.length });
   logger.info({ mediaId, eventId, faces: faces.length }, '[aiWorker] detect-faces done');
 }
 
@@ -199,7 +191,7 @@ async function matchSelfie({ guestId, eventId }) {
     }
   }
 
-  await emit(eventId, 'match:complete', { guestId, eventId, confirmed: newAutoConfirmed, pending: newPending, token: galleryToken.token });
+  await publishToEvent(eventId, 'match:complete', { guestId, eventId, confirmed: newAutoConfirmed, pending: newPending, token: galleryToken.token });
   logger.info({ guestId, eventId, newAutoConfirmed, newPending }, '[aiWorker] match-selfie done');
 }
 

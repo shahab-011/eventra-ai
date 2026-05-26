@@ -25,6 +25,7 @@ import '../config/env.js';   // validate env at process start
 import { Worker }   from 'bullmq';
 import prisma       from '../lib/prisma.js';
 import { bullConnection, moveToDLQ } from '../lib/queues.js';
+import { closePublisher } from '../lib/realtime.js';
 import logger       from '../lib/logger.js';
 
 // ─── Processor imports ────────────────────────────────────────
@@ -107,7 +108,10 @@ async function shutdown(signal) {
   // Wait for in-flight jobs to finish (BullMQ default timeout 30s per worker)
   await Promise.allSettled(workers.map(w => w.close()));
 
-  // Close per-worker Redis publishers
+  // Close the shared realtime publisher (used by all workers via lib/realtime.js)
+  await closePublisher().catch(() => {});
+
+  // These are now all no-ops but kept for future use
   await Promise.allSettled([
     cleanupMedia(),
     cleanupAI(),
